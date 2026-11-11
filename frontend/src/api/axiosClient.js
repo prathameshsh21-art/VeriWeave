@@ -1,7 +1,19 @@
 import axios from 'axios';
 
+const rawApiUrl = import.meta.env.VITE_API_URL;
+
+const resolveApiBaseUrl = () => {
+  if (!rawApiUrl || !rawApiUrl.trim()) {
+    return '/api';
+  }
+  const clean = rawApiUrl.trim().replace(/\/+$/, '');
+  return clean.endsWith('/api') ? clean : `${clean}/api`;
+};
+
+export const API_BASE_URL = resolveApiBaseUrl();
+
 const axiosClient = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -31,7 +43,7 @@ axiosClient.interceptors.response.use(
       const refreshToken = localStorage.getItem('veriweave_refresh_token');
       if (refreshToken) {
         try {
-          const res = await axios.post('/api/auth/refresh', { refreshToken });
+          const res = await axios.post(`${API_BASE_URL}/auth/refresh`, { refreshToken });
           if (res.data?.success && res.data?.data?.accessToken) {
             const newAccess = res.data.data.accessToken;
             const newRefresh = res.data.data.refreshToken;
