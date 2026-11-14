@@ -7,9 +7,13 @@ import com.veriweave.auth.entity.TokenType;
 import com.veriweave.auth.repository.AuthVerificationTokenRepository;
 import com.veriweave.workspace.dto.AcceptInvitationRequest;
 import com.veriweave.workspace.dto.CreateInvitationRequest;
+import com.veriweave.workspace.entity.InvitationStatus;
 import com.veriweave.workspace.entity.Role;
 import com.veriweave.workspace.entity.User;
+import com.veriweave.workspace.entity.WorkspaceInvitation;
 import com.veriweave.workspace.repository.UserRepository;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,11 +21,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import com.veriweave.security.RateLimitingService;
+import jakarta.persistence.Column;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -29,6 +38,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -51,6 +61,9 @@ public class TeamInvitationAndAuthHardeningTest {
 
     @Autowired
     private RateLimitingService rateLimitingService;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @BeforeEach
     void setUp() {
@@ -351,6 +364,76 @@ public class TeamInvitationAndAuthHardeningTest {
         mockMvc.perform(get("/api/workspaces/" + workspaceId + "/members")
                         .header("Authorization", "Bearer " + reviewerToken))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("Verify AuthVerificationToken and WorkspaceInvitation entity mappings match VARCHAR migration schema")
+    void shouldVerifyEntityMappingsMatchV4MigrationSchema() throws Exception {
+        // 1. Verify AuthVerificationToken.tokenType mapping
+        Field tokenTypeField = AuthVerificationToken.class.getDeclaredField("tokenType");
+        Enumerated enumerated = tokenTypeField.getAnnotation(Enumerated.class);
+        assertNotNull(enumerated, "tokenType must have @Enumerated");
+        assertEquals(EnumType.STRING, enumerated.value(), "tokenType must be EnumType.STRING");
+
+        JdbcTypeCode jdbcTypeCode = tokenTypeField.getAnnotation(JdbcTypeCode.class);
+        assertNotNull(jdbcTypeCode, "tokenType must have @JdbcTypeCode(SqlTypes.VARCHAR) for MySQL schema validation");
+        assertEquals(SqlTypes.VARCHAR, jdbcTypeCode.value(), "tokenType @JdbcTypeCode must be SqlTypes.VARCHAR");
+
+        Column column = tokenTypeField.getAnnotation(Column.class);
+        assertNotNull(column, "tokenType must have @Column");
+        assertEquals("token_type", column.name(), "column name must be token_type");
+        assertEquals(50, column.length(), "column length must be 50");
+        assertFalse(column.nullable(), "token_type column must be NOT NULL");
+
+        // 2. Verify WorkspaceInvitation role and status mappings
+        Field roleField = WorkspaceInvitation.class.getDeclaredField("role");
+        assertNotNull(roleField.getAnnotation(Enumerated.class));
+        assertNotNull(roleField.getAnnotation(JdbcTypeCode.class));
+        assertEquals(SqlTypes.VARCHAR, roleField.getAnnotation(JdbcTypeCode.class).value());
+
+        Field statusField = WorkspaceInvitation.class.getDeclaredField("status");
+        assertNotNull(statusField.getAnnotation(Enumerated.class));
+        assertNotNull(statusField.getAnnotation(JdbcTypeCode.class));
+        assertEquals(SqlTypes.VARCHAR, statusField.getAnnotation(JdbcTypeCode.class).value());
+
+        // 3. Verify database persistence and string representation for both TokenType enum values
+        AuthVerificationToken emailToken = AuthVerificationToken.builder()
+                .email("verify-schema@veriflora.com")
+                .tokenHash(sha256("hash1"))
+                .tokenType(TokenType.EMAIL_VERIFICATION)
+                .expiresAt(Instant.now().plus(1, ChronoUnit.HOURS))
+                .build();
+        AuthVerificationToken savedEmailToken = tokenRepository.save(emailToken);
+
+        AuthVerificationToken resetToken = AuthVerificationToken.builder()
+                .email("verify-schema@veriflora.com")
+                .tokenHash(sha256("hash2"))
+                .tokenType(TokenType.PASSWORD_RESET)
+                .expiresAt(Instant.now().plus(1, ChronoUnit.HOURS))
+                .build();
+        AuthVerificationToken savedResetToken = tokenRepository.save(resetToken);
+
+        // Verify raw SQL queries return VARCHAR string representation matching enum names
+        String emailRawType = jdbcTemplate.queryForObject(
+                "SELECT token_type FROM auth_verification_tokens WHERE id = ?",
+                String.class,
+                savedEmailToken.getId()
+        );
+        assertEquals("EMAIL_VERIFICATION", emailRawType);
+
+        String resetRawType = jdbcTemplate.queryForObject(
+                "SELECT token_type FROM auth_verification_tokens WHERE id = ?",
+                String.class,
+                savedResetToken.getId()
+        );
+        assertEquals("PASSWORD_RESET", resetRawType);
+
+        // Verify entity retrieval deserializes properly
+        AuthVerificationToken fetchedEmail = tokenRepository.findById(savedEmailToken.getId()).orElseThrow();
+        assertEquals(TokenType.EMAIL_VERIFICATION, fetchedEmail.getTokenType());
+
+        AuthVerificationToken fetchedReset = tokenRepository.findById(savedResetToken.getId()).orElseThrow();
+        assertEquals(TokenType.PASSWORD_RESET, fetchedReset.getTokenType());
     }
 
     private String sha256(String text) {

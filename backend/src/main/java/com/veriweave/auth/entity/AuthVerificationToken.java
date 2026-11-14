@@ -3,6 +3,8 @@ package com.veriweave.auth.entity;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
 
@@ -26,6 +28,7 @@ public class AuthVerificationToken {
     private String tokenHash;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "token_type", nullable = false, length = 50)
     private TokenType tokenType;
 
