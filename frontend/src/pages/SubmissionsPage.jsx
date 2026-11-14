@@ -17,8 +17,12 @@ import {
   RefreshCw,
   Send,
   UserCheck,
-  Ban
+  Ban,
+  GitBranch,
+  ShieldCheck,
+  History
 } from 'lucide-react';
+import TraceabilityModal from '../components/TraceabilityModal';
 
 const severityBadge = {
   CRITICAL: 'bg-rose-100 text-rose-800 border-rose-300',
@@ -50,6 +54,13 @@ export default function SubmissionsPage() {
   const [newTitle, setNewTitle] = useState('');
   const [newCampaign, setNewCampaign] = useState('');
   const [newRawText, setNewRawText] = useState('');
+
+  // Traceability & Revision states
+  const [traceFindingId, setTraceFindingId] = useState(null);
+  const [showRevisionModal, setShowRevisionModal] = useState(false);
+  const [revisionRawText, setRevisionRawText] = useState('');
+  const [submissionVersions, setSubmissionVersions] = useState([]);
+  const [submissionDecisions, setSubmissionDecisions] = useState([]);
 
   // Finding response states: { [findingId]: { action: 'ACCEPT'|'MODIFY'|'REJECT', reason: '', proposedEdit: '' } }
   const [findingResponses, setFindingResponses] = useState({});
@@ -94,10 +105,49 @@ export default function SubmissionsPage() {
       if (res.data?.success) {
         setDetail(res.data.data);
       }
+      try {
+        const vRes = await axiosClient.get(`/workspaces/${workspaceId}/submissions/${id}/versions`);
+        if (vRes.data?.success) {
+          setSubmissionVersions(vRes.data.data || []);
+        }
+      } catch (vErr) {
+        console.warn('Could not load version history', vErr);
+      }
+      try {
+        const dRes = await axiosClient.get(`/workspaces/${workspaceId}/submissions/${id}/decisions`);
+        if (dRes.data?.success) {
+          setSubmissionDecisions(dRes.data.data || []);
+        }
+      } catch (dErr) {
+        console.warn('Could not load decisions', dErr);
+      }
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load submission details');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Create Revision (v2, v3, etc.)
+  const handleCreateRevision = async (e) => {
+    e.preventDefault();
+    if (!revisionRawText.trim()) return;
+    try {
+      setActionLoading(true);
+      const res = await axiosClient.post(
+        `/workspaces/${workspaceId}/submissions/${selectedSubmissionId}/revisions`,
+        { rawText: revisionRawText.trim() }
+      );
+      if (res.data?.success) {
+        setShowRevisionModal(false);
+        setSuccessMsg(`Revision created! Version v${res.data.data.currentVersion?.versionNumber || 2} is in DRAFT. Run analysis to verify compliance.`);
+        await fetchDetail(selectedSubmissionId);
+        await fetchSubmissions();
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to create revision');
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -252,7 +302,7 @@ export default function SubmissionsPage() {
           <div>
             <h1 className="text-xl font-bold text-slate-900">Submissions & Governance Workflow</h1>
             <p className="text-xs text-slate-500">
-              12-stage automated copy analysis, deterministic evidence verification, creator responses, and reviewer decisions
+              Rule-based copy analysis, deterministic evidence verification, creator responses, and reviewer decisions
             </p>
           </div>
         </div>
@@ -350,10 +400,42 @@ export default function SubmissionsPage() {
                       <span>•</span>
                       <span>Creator: <strong>{subObj.createdBy?.fullName || subObj.createdBy || 'Creator'}</strong> ({subObj.createdBy?.email || subObj.createdByEmail || ''})</span>
                     </div>
+                    {submissionVersions.length > 1 && (
+                      <div className="flex items-center space-x-1.5 mt-2 text-xs">
+                        <History className="w-3.5 h-3.5 text-slate-400" />
+                        <span className="text-slate-400">Revisions:</span>
+                        {submissionVersions.map((v) => (
+                          <span
+                            key={v.id}
+                            className={`px-2 py-0.5 rounded text-[11px] font-mono font-medium ${
+                              v.versionNumber === (subObj.currentVersionNumber || versionObj.versionNumber)
+                                ? 'bg-teal-100 text-teal-800 border border-teal-200'
+                                : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            v{v.versionNumber}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
-                  {/* Run Analysis Action */}
+                  {/* Actions */}
                   <div className="flex items-center space-x-2">
+                    {subObj.status !== 'APPROVED' && (
+                      <button
+                        onClick={() => {
+                          setRevisionRawText(versionObj.rawText || '');
+                          setShowRevisionModal(true);
+                        }}
+                        disabled={actionLoading}
+                        className="inline-flex items-center space-x-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 px-3.5 py-2 rounded-lg text-sm font-semibold shadow-xs transition-colors"
+                        title="Create a new revision (v2) of this submission"
+                      >
+                        <GitBranch className="w-4 h-4 text-slate-500" />
+                        <span>Create Revision</span>
+                      </button>
+                    )}
                     <button
                       onClick={handleRunAnalysis}
                       disabled={actionLoading}
@@ -451,9 +533,20 @@ export default function SubmissionsPage() {
                                 {finding.category}
                               </span>
                             </div>
-                            <span className="text-[10px] font-mono text-slate-400">
-                              Offset [{finding.passageStart}..{finding.passageEnd}]
-                            </span>
+                            <div className="flex items-center space-x-2">
+                              <button
+                                type="button"
+                                onClick={() => setTraceFindingId(finding.id)}
+                                className="inline-flex items-center space-x-1 px-2.5 py-1 rounded bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-xs font-semibold transition-colors"
+                                title="Open complete Guideline-to-Decision Traceability Provenance"
+                              >
+                                <ShieldCheck className="w-3.5 h-3.5 text-teal-600" />
+                                <span>Inspect Audit Trace</span>
+                              </button>
+                              <span className="text-[10px] font-mono text-slate-400">
+                                [{finding.passageStart}..{finding.passageEnd}]
+                              </span>
+                            </div>
                           </div>
 
                           {/* Grounded Evidence Box */}
@@ -491,83 +584,115 @@ export default function SubmissionsPage() {
                               )}
                             </div>
 
-                            <div className="flex items-center space-x-2">
-                              {['ACCEPT', 'MODIFY', 'REJECT'].map((act) => (
+                            {/* If viewing as an independent Reviewer (who did not author the submission), show read-only creator response */}
+                            {isReviewerOrAdmin && !isCreatorOfSubmission ? (
+                              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1.5">
+                                {existingResp ? (
+                                  <>
+                                    <div className="flex items-center justify-between">
+                                      <span className="font-semibold text-slate-800">
+                                        Action Taken: <strong className="text-teal-800">{existingResp.action}</strong>
+                                      </span>
+                                    </div>
+                                    {existingResp.reason && (
+                                      <p className="text-slate-600">
+                                        <span className="font-medium text-slate-700">Creator Rationale:</span> {existingResp.reason}
+                                      </p>
+                                    )}
+                                    {(existingResp.modifiedText || existingResp.proposedEdit) && (
+                                      <p className="text-blue-900 font-mono text-[11px] bg-blue-50 p-2 rounded border border-blue-100">
+                                        <span className="font-sans font-medium text-blue-700">Proposed Alternative:</span> "{existingResp.modifiedText || existingResp.proposedEdit}"
+                                      </p>
+                                    )}
+                                  </>
+                                ) : (
+                                  <p className="text-slate-400 italic">
+                                    Pending creator response. Author has not yet recorded an action for this finding.
+                                  </p>
+                                )}
+                              </div>
+                            ) : (
+                              /* Interactive response controls for the content creator */
+                              <>
+                                <div className="flex items-center space-x-2">
+                                  {['ACCEPT', 'MODIFY', 'REJECT'].map((act) => (
+                                    <button
+                                      key={act}
+                                      type="button"
+                                      onClick={() =>
+                                        setFindingResponses((prev) => ({
+                                          ...prev,
+                                          [finding.id]: { ...currentFormState, action: act }
+                                        }))
+                                      }
+                                      className={`px-3 py-1 rounded text-xs font-semibold border transition-all ${
+                                        currentFormState.action === act
+                                          ? act === 'ACCEPT'
+                                            ? 'bg-emerald-600 text-white border-emerald-600'
+                                            : act === 'MODIFY'
+                                            ? 'bg-blue-600 text-white border-blue-600'
+                                            : 'bg-rose-600 text-white border-rose-600'
+                                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                                      }`}
+                                    >
+                                      {act === 'ACCEPT' ? 'Accept Fix' : act === 'MODIFY' ? 'Modify Copy' : 'Reject Finding'}
+                                    </button>
+                                  ))}
+                                </div>
+
+                                {/* Reason Input if MODIFY or REJECT */}
+                                {(currentFormState.action === 'MODIFY' || currentFormState.action === 'REJECT') && (
+                                  <div className="space-y-1.5 pt-1">
+                                    <label className="block text-[11px] font-semibold text-rose-700">
+                                      Mandatory Rationale *
+                                    </label>
+                                    <input
+                                      type="text"
+                                      required
+                                      placeholder="Explain why this finding is rejected or modified..."
+                                      value={currentFormState.reason || ''}
+                                      onChange={(e) =>
+                                        setFindingResponses((prev) => ({
+                                          ...prev,
+                                          [finding.id]: { ...currentFormState, reason: e.target.value }
+                                        }))
+                                      }
+                                      className="w-full text-xs border border-rose-300 rounded px-2.5 py-1.5 focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                                    />
+                                  </div>
+                                )}
+
+                                {currentFormState.action === 'MODIFY' && (
+                                  <div className="space-y-1.5 pt-1">
+                                    <label className="block text-[11px] font-semibold text-slate-600">
+                                      Proposed Alternative Copy
+                                    </label>
+                                    <input
+                                      type="text"
+                                      placeholder="Enter proposed alternative copy..."
+                                      value={currentFormState.proposedEdit || ''}
+                                      onChange={(e) =>
+                                        setFindingResponses((prev) => ({
+                                          ...prev,
+                                          [finding.id]: { ...currentFormState, proposedEdit: e.target.value }
+                                        }))
+                                      }
+                                      className="w-full text-xs border border-slate-300 rounded px-2.5 py-1.5 focus:ring-1 focus:ring-teal-500 focus:outline-none"
+                                    />
+                                  </div>
+                                )}
+
                                 <button
-                                  key={act}
                                   type="button"
-                                  onClick={() =>
-                                    setFindingResponses((prev) => ({
-                                      ...prev,
-                                      [finding.id]: { ...currentFormState, action: act }
-                                    }))
-                                  }
-                                  className={`px-3 py-1 rounded text-xs font-semibold border transition-all ${
-                                    currentFormState.action === act
-                                      ? act === 'ACCEPT'
-                                        ? 'bg-emerald-600 text-white border-emerald-600'
-                                        : act === 'MODIFY'
-                                        ? 'bg-blue-600 text-white border-blue-600'
-                                        : 'bg-rose-600 text-white border-rose-600'
-                                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                                  }`}
+                                  onClick={() => handleFindingResponseSubmit(finding.id)}
+                                  disabled={actionLoading}
+                                  className="mt-2 inline-flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-900 text-white px-3 py-1 rounded text-xs font-medium transition-colors"
                                 >
-                                  {act === 'ACCEPT' ? 'Accept Fix' : act === 'MODIFY' ? 'Modify Copy' : 'Reject Finding'}
+                                  <Send className="w-3 h-3" />
+                                  <span>Save Response</span>
                                 </button>
-                              ))}
-                            </div>
-
-                            {/* Reason Input if MODIFY or REJECT */}
-                            {(currentFormState.action === 'MODIFY' || currentFormState.action === 'REJECT') && (
-                              <div className="space-y-1.5 pt-1">
-                                <label className="block text-[11px] font-semibold text-rose-700">
-                                  Mandatory Rationale *
-                                </label>
-                                <input
-                                  type="text"
-                                  required
-                                  placeholder="Explain why this finding is rejected or modified..."
-                                  value={currentFormState.reason || ''}
-                                  onChange={(e) =>
-                                    setFindingResponses((prev) => ({
-                                      ...prev,
-                                      [finding.id]: { ...currentFormState, reason: e.target.value }
-                                    }))
-                                  }
-                                  className="w-full text-xs border border-rose-300 rounded px-2.5 py-1.5 focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                                />
-                              </div>
+                              </>
                             )}
-
-                            {currentFormState.action === 'MODIFY' && (
-                              <div className="space-y-1.5 pt-1">
-                                <label className="block text-[11px] font-semibold text-slate-600">
-                                  Proposed Alternative Copy
-                                </label>
-                                <input
-                                  type="text"
-                                  placeholder="Enter proposed alternative copy..."
-                                  value={currentFormState.proposedEdit || ''}
-                                  onChange={(e) =>
-                                    setFindingResponses((prev) => ({
-                                      ...prev,
-                                      [finding.id]: { ...currentFormState, proposedEdit: e.target.value }
-                                    }))
-                                  }
-                                  className="w-full text-xs border border-slate-300 rounded px-2.5 py-1.5 focus:ring-1 focus:ring-teal-500 focus:outline-none"
-                                />
-                              </div>
-                            )}
-
-                            <button
-                              type="button"
-                              onClick={() => handleFindingResponseSubmit(finding.id)}
-                              disabled={actionLoading}
-                              className="mt-2 inline-flex items-center space-x-1.5 bg-slate-800 hover:bg-slate-900 text-white px-3 py-1 rounded text-xs font-medium transition-colors"
-                            >
-                              <Send className="w-3 h-3" />
-                              <span>Save Response</span>
-                            </button>
                           </div>
                         </div>
                       );
@@ -576,103 +701,219 @@ export default function SubmissionsPage() {
                 </div>
               </div>
 
-              {/* Reviewer Final Decision Card */}
-              <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                  <div className="flex items-center space-x-2">
-                    <UserCheck className="w-5 h-5 text-teal-600" />
-                    <h3 className="font-bold text-slate-900 text-base">Reviewer Decision Gate</h3>
-                  </div>
-                  <span className="text-xs text-slate-500">
-                    Authority: REVIEWER or ADMIN • Enforces Separation of Duties
-                  </span>
-                </div>
-
-                {/* Separation of Duties Warning */}
-                {isCreatorOfSubmission && (
-                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-center space-x-2">
-                    <Ban className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                    <span>
-                      <strong>Separation of Duties Rule:</strong> You created this submission ({user?.email}). You cannot approve or review your own copy. Please switch to Marcus Thorne (REVIEWER) or Elena Vance (ADMIN) to record a decision.
+              {/* Role-Specific Decision & Feedback Area */}
+              {!isReviewerOrAdmin ? (
+                /* CREATOR VIEW: Reviewer Feedback & Governance Status (NO approval/rejection controls!) */
+                <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div className="flex items-center space-x-2">
+                      <UserCheck className="w-5 h-5 text-teal-600" />
+                      <h3 className="font-bold text-slate-900 text-base">Compliance Review Status</h3>
+                    </div>
+                    <span className="text-xs text-slate-500">
+                      Independent Governance Gate
                     </span>
                   </div>
-                )}
 
-                <form onSubmit={handleRecordDecision} className="space-y-4">
-                  {/* Decision Selector */}
-                  <div className="flex items-center space-x-3">
-                    {[
-                      { val: 'APPROVE', label: 'Approve Submission', color: 'emerald' },
-                      { val: 'REQUEST_CHANGES', label: 'Request Changes', color: 'amber' },
-                      { val: 'REJECT', label: 'Reject Submission', color: 'rose' }
-                    ].map((d) => (
-                      <button
-                        key={d.val}
-                        type="button"
-                        onClick={() => setReviewDecision(d.val)}
-                        className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${
-                          reviewDecision === d.val
-                            ? d.color === 'emerald'
-                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                              : d.color === 'amber'
-                              ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                              : 'bg-rose-600 text-white border-rose-600 shadow-xs'
-                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-                        }`}
-                      >
-                        {d.label}
-                      </button>
-                    ))}
-                  </div>
+                  {submissionDecisions.length > 0 ? (
+                    <div className="space-y-3">
+                      {submissionDecisions.slice(0, 1).map((dec) => (
+                        <div
+                          key={dec.id}
+                          className={`p-4 rounded-xl border ${
+                            dec.decision === 'APPROVED'
+                              ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                              : dec.decision === 'CHANGES_REQUESTED'
+                              ? 'bg-amber-50/70 border-amber-200 text-amber-900'
+                              : 'bg-rose-50/70 border-rose-200 text-rose-900'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="font-bold text-xs uppercase tracking-wider px-2 py-0.5 rounded bg-white/80 shadow-2xs">
+                              {dec.decision?.replace('_', ' ')}
+                            </span>
+                            <span className="text-xs opacity-75 font-mono">
+                              {dec.createdAt ? new Date(dec.createdAt).toLocaleString() : ''}
+                            </span>
+                          </div>
 
-                  {/* Mandatory Override Justification if Approving with Unresolved Critical Findings */}
-                  {reviewDecision === 'APPROVE' && hasUnresolvedCriticalFindings && (
-                    <div className="p-4 bg-rose-50 border border-rose-200 rounded-lg space-y-2">
-                      <div className="flex items-center space-x-2 text-rose-800 font-semibold text-xs">
-                        <AlertOctagon className="w-4 h-4 text-rose-600" />
-                        <span>MANDATORY OVERRIDE JUSTIFICATION REQUIRED</span>
+                          {dec.comment && (
+                            <p className="text-sm font-medium mt-1.5">
+                              "{dec.comment}"
+                            </p>
+                          )}
+
+                          {dec.overrideReason && (
+                            <p className="text-xs mt-2 p-2 bg-white/60 rounded border border-amber-200/50">
+                              <span className="font-bold uppercase tracking-wider text-[10px] block mb-0.5">Override Justification:</span>
+                              {dec.overrideReason}
+                            </p>
+                          )}
+
+                          <div className="mt-2.5 text-xs opacity-80 flex items-center justify-between">
+                            <span>Reviewed by <strong>{dec.reviewerName || 'Independent Reviewer'}</strong></span>
+                            {dec.decision === 'CHANGES_REQUESTED' && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRevisionRawText(versionObj.rawText || '');
+                                  setShowRevisionModal(true);
+                                }}
+                                className="inline-flex items-center space-x-1.5 bg-amber-700 hover:bg-amber-800 text-white px-3 py-1 rounded-lg text-xs font-semibold shadow-xs transition-colors"
+                              >
+                                <GitBranch className="w-3.5 h-3.5" />
+                                <span>Create Revision (v{(subObj.currentVersionNumber || versionObj.versionNumber || 1) + 1})</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-slate-600 text-xs flex items-center space-x-3">
+                      <Clock className="w-5 h-5 text-slate-400 flex-shrink-0" />
+                      <div>
+                        <span className="font-semibold block text-slate-800">Pending Independent Review</span>
+                        <span>Your submission is queued for compliance verification. When the reviewer evaluates your copy, their decision and notes will appear here.</span>
                       </div>
-                      <p className="text-xs text-rose-700">
-                        This submission has unresolved CRITICAL findings. To approve, you must record a formal, audited business justification.
-                      </p>
-                      <textarea
-                        required
-                        rows={2}
-                        placeholder="State legal / brand director justification for overriding critical compliance findings..."
-                        value={overrideReason}
-                        onChange={(e) => setOverrideReason(e.target.value)}
-                        className="w-full text-xs border border-rose-300 rounded p-2 focus:ring-1 focus:ring-rose-500 focus:outline-none"
-                      />
                     </div>
                   )}
-
-                  {/* Review Comments */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                      Review Comments {reviewDecision === 'REJECT' && <span className="text-rose-600">*</span>}
-                    </label>
-                    <textarea
-                      rows={2}
-                      required={reviewDecision === 'REJECT'}
-                      placeholder="Add compliance notes or revision instructions..."
-                      value={reviewComments}
-                      onChange={(e) => setReviewComments(e.target.value)}
-                      className="w-full text-sm border border-slate-300 rounded-lg p-2.5 focus:ring-1 focus:ring-teal-500 focus:outline-none"
-                    />
+                </div>
+              ) : isCreatorOfSubmission ? (
+                /* REVIEWER/ADMIN VIEW WHO AUTHORED THE SUBMISSION (Separation of duties: Cannot review own copy) */
+                <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div className="flex items-center space-x-2">
+                      <ShieldAlert className="w-5 h-5 text-amber-600" />
+                      <h3 className="font-bold text-slate-900 text-base">Independent Review Required</h3>
+                    </div>
+                    <span className="text-xs text-slate-500 font-mono">
+                      Separation of Duties
+                    </span>
                   </div>
 
-                  <div className="flex items-center justify-end">
-                    <button
-                      type="submit"
-                      disabled={actionLoading || isCreatorOfSubmission}
-                      className="inline-flex items-center space-x-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors shadow-xs"
-                    >
-                      <UserCheck className="w-4 h-4" />
-                      <span>{actionLoading ? 'Recording...' : 'Commit Review Decision'}</span>
-                    </button>
+                  <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start space-x-3">
+                    <Ban className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold text-sm">Separation of Duties Policy Enforced</p>
+                      <p className="mt-1 leading-relaxed text-amber-800">
+                        You authored this submission ({user?.email}). Under VeriWeave compliance governance, content creators cannot approve, request changes, or reject their own submissions. Another reviewer or administrator must conduct the independent evaluation.
+                      </p>
+                    </div>
                   </div>
-                </form>
-              </div>
+
+                  {submissionDecisions.length > 0 && (
+                    <div className="pt-2">
+                      <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">Previous Decisions:</span>
+                      <div className="space-y-2">
+                        {submissionDecisions.map((dec) => (
+                          <div key={dec.id} className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs flex items-center justify-between">
+                            <div>
+                              <span className="font-bold text-slate-800 font-mono">{dec.decision}</span>
+                              <span className="text-slate-500 ml-2">by {dec.reviewerName}</span>
+                              {dec.comment && <p className="text-slate-600 mt-1">"{dec.comment}"</p>}
+                            </div>
+                            <span className="text-[11px] text-slate-400 font-mono">
+                              {new Date(dec.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* REVIEWER/ADMIN VIEW (Independent Reviewer Decision Gate) */
+                <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div className="flex items-center space-x-2">
+                      <UserCheck className="w-5 h-5 text-teal-600" />
+                      <h3 className="font-bold text-slate-900 text-base">Reviewer Decision Gate</h3>
+                    </div>
+                    <span className="text-xs text-slate-500">
+                      Authority: REVIEWER or ADMIN • Enforces Separation of Duties
+                    </span>
+                  </div>
+
+                  <form onSubmit={handleRecordDecision} className="space-y-4">
+                    {/* Decision Selector */}
+                    <div className="flex items-center space-x-3">
+                      {[
+                        { val: 'APPROVE', label: 'Approve Submission', color: 'emerald' },
+                        { val: 'REQUEST_CHANGES', label: 'Request Changes', color: 'amber' },
+                        { val: 'REJECT', label: 'Reject Submission', color: 'rose' }
+                      ].map((d) => (
+                        <button
+                          key={d.val}
+                          type="button"
+                          onClick={() => setReviewDecision(d.val)}
+                          className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${
+                            reviewDecision === d.val
+                              ? d.color === 'emerald'
+                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                                : d.color === 'amber'
+                                ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                                : 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                              : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                          }`}
+                        >
+                          {d.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Mandatory Override Justification if Approving with Unresolved Critical Findings */}
+                    {reviewDecision === 'APPROVE' && hasUnresolvedCriticalFindings && (
+                      <div className="p-4 bg-rose-50 border border-rose-200 rounded-lg space-y-2">
+                        <div className="flex items-center space-x-2 text-rose-800 font-semibold text-xs">
+                          <AlertOctagon className="w-4 h-4 text-rose-600" />
+                          <span>MANDATORY OVERRIDE JUSTIFICATION REQUIRED</span>
+                        </div>
+                        <p className="text-xs text-rose-700">
+                          This submission has unresolved CRITICAL findings. To approve, you must record a formal, audited business justification.
+                        </p>
+                        <textarea
+                          required
+                          rows={2}
+                          placeholder="State legal / brand director justification for overriding critical compliance findings..."
+                          value={overrideReason}
+                          onChange={(e) => setOverrideReason(e.target.value)}
+                          className="w-full text-xs border border-rose-300 rounded p-2 focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                        />
+                      </div>
+                    )}
+
+                    {/* Review Comments */}
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                        Review Comments {(reviewDecision === 'REJECT' || reviewDecision === 'REQUEST_CHANGES') && <span className="text-rose-600">*</span>}
+                      </label>
+                      <textarea
+                        rows={2}
+                        required={reviewDecision === 'REJECT' || reviewDecision === 'REQUEST_CHANGES'}
+                        placeholder={reviewDecision === 'REQUEST_CHANGES' ? "Provide specific instructions for the creator to address before re-submitting..." : "Add compliance feedback or notes..."}
+                        value={reviewComments}
+                        onChange={(e) => setReviewComments(e.target.value)}
+                        className="w-full text-sm border border-slate-300 rounded-lg p-2.5 focus:ring-1 focus:ring-teal-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-xs text-slate-400">
+                        Recording as: <strong className="text-slate-600">{user?.fullName || user?.email}</strong>
+                      </span>
+                      <button
+                        type="submit"
+                        disabled={actionLoading}
+                        className="inline-flex items-center space-x-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors shadow-xs"
+                      >
+                        <UserCheck className="w-4 h-4" />
+                        <span>{actionLoading ? 'Recording...' : 'Commit Review Decision'}</span>
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
             </>
           ) : (
             <div className="bg-white border border-slate-200 rounded-xl p-12 text-center text-slate-400">
@@ -759,6 +1000,70 @@ export default function SubmissionsPage() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Modal: Create Revision */}
+      {showRevisionModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-xl w-full p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <GitBranch className="w-5 h-5 text-teal-600" />
+                <h3 className="text-lg font-bold text-slate-900">Create Copy Revision</h3>
+              </div>
+              <span className="text-xs bg-teal-50 text-teal-700 font-bold px-2.5 py-0.5 rounded">
+                Next Version: v{(subObj.currentVersionNumber || versionObj.versionNumber || 1) + 1}
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-500">
+              Update the copy text to address reviewer feedback or replace prohibited phrasing with approved alternatives. A new immutable content version will be created in status DRAFT.
+            </p>
+
+            <form onSubmit={handleCreateRevision} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Revised Copy Content
+                </label>
+                <textarea
+                  required
+                  rows={6}
+                  value={revisionRawText}
+                  onChange={(e) => setRevisionRawText(e.target.value)}
+                  placeholder="Enter revised marketing copy text..."
+                  className="w-full text-sm border border-slate-300 rounded-lg p-3 font-mono focus:ring-1 focus:ring-teal-500 focus:outline-none leading-relaxed"
+                />
+              </div>
+
+              <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowRevisionModal(false)}
+                  className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading}
+                  className="bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-colors shadow-xs"
+                >
+                  {actionLoading ? 'Creating Revision...' : 'Save & Publish Revision'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Guideline-to-Decision Traceability Explorer */}
+      {traceFindingId && (
+        <TraceabilityModal
+          workspaceId={workspaceId}
+          submissionId={selectedSubmissionId}
+          findingId={traceFindingId}
+          onClose={() => setTraceFindingId(null)}
+        />
       )}
     </div>
   );

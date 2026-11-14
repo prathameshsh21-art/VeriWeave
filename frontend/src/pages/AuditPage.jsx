@@ -10,7 +10,9 @@ import {
   Clock, 
   Lock,
   Tag,
-  Hash
+  Hash,
+  AlertTriangle,
+  X
 } from 'lucide-react';
 
 const actionBadges = {
@@ -28,24 +30,32 @@ const actionBadges = {
 export default function AuditPage() {
   const { activeWorkspace } = useAuth();
   const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedEvent, setSelectedEvent] = useState(null);
 
-  const workspaceId = activeWorkspace?.id;
+  const workspaceId = activeWorkspace?.id || localStorage.getItem('veriweave_active_workspace_id');
 
   const fetchAuditEvents = async () => {
-    if (!workspaceId) return;
+    const currentWsId = activeWorkspace?.id || localStorage.getItem('veriweave_active_workspace_id');
+    if (!currentWsId) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
-      const res = await axiosClient.get(`/workspaces/${workspaceId}/audit`);
+      setError(null);
+      const res = await axiosClient.get(`/workspaces/${currentWsId}/audit`);
       if (res.data?.success) {
         setEvents(res.data.data || []);
       }
     } catch (err) {
       console.error('Failed to load audit events', err);
+      setError(err.response?.data?.message || 'Failed to load audit events from server.');
     } finally {
       setLoading(false);
+      setHasLoaded(true);
     }
   };
 
@@ -88,15 +98,24 @@ export default function AuditPage() {
               placeholder="Search actions, actors, entities..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="text-xs pl-9 pr-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-teal-500 focus:outline-none w-64 bg-white"
+              className="text-xs pl-9 pr-8 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-teal-500 focus:outline-none w-64 bg-white"
             />
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
           <button
             onClick={fetchAuditEvents}
+            disabled={loading}
             title="Refresh Log"
-            className="p-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-slate-600 transition-colors"
+            className="p-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-slate-600 transition-colors disabled:opacity-50"
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-teal-600' : ''}`} />
           </button>
         </div>
       </div>
@@ -107,7 +126,7 @@ export default function AuditPage() {
           <div className="flex items-center space-x-2">
             <ShieldCheck className="w-4 h-4 text-teal-600" />
             <span className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
-              Recorded Events ({filteredEvents.length})
+              Recorded Events ({hasLoaded ? filteredEvents.length : '...'})
             </span>
           </div>
           <span className="text-[11px] font-mono text-slate-400">
@@ -115,11 +134,46 @@ export default function AuditPage() {
           </span>
         </div>
 
-        {filteredEvents.length === 0 ? (
-          <div className="p-12 text-center text-slate-400 text-sm">
-            {loading ? 'Loading audit events...' : 'No audit events recorded yet.'}
+        {/* Loading State */}
+        {loading && (
+          <div className="p-16 text-center text-slate-500 text-sm flex flex-col items-center justify-center space-y-3">
+            <RefreshCw className="w-6 h-6 animate-spin text-teal-600" />
+            <span className="font-medium">Loading immutable audit trail...</span>
           </div>
-        ) : (
+        )}
+
+        {/* Error State */}
+        {!loading && error && (
+          <div className="p-8 text-center text-rose-700 bg-rose-50/50 rounded-lg m-4 border border-rose-200 text-sm space-y-3">
+            <div className="flex items-center justify-center space-x-2 font-semibold">
+              <AlertTriangle className="w-5 h-5 text-rose-600" />
+              <span>{error}</span>
+            </div>
+            <button
+              onClick={fetchAuditEvents}
+              className="px-4 py-1.5 bg-white border border-rose-300 text-rose-800 rounded-lg text-xs font-semibold hover:bg-rose-50 shadow-sm transition-all"
+            >
+              Retry Loading
+            </button>
+          </div>
+        )}
+
+        {/* Empty State (Only after successful response with 0 records) */}
+        {!loading && !error && hasLoaded && filteredEvents.length === 0 && (
+          <div className="p-16 text-center text-slate-400 text-sm space-y-2">
+            <div className="font-semibold text-slate-600">
+              {searchTerm ? 'No matching audit events found.' : 'No audit events recorded yet.'}
+            </div>
+            <p className="text-xs text-slate-400 max-w-sm mx-auto">
+              {searchTerm 
+                ? 'Try clearing your search query to inspect all recorded events.' 
+                : 'Governance events will appear here automatically when guidelines are approved or submissions are reviewed.'}
+            </p>
+          </div>
+        )}
+
+        {/* Populated Events Table */}
+        {!loading && !error && filteredEvents.length > 0 && (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-100 text-left text-xs">
               <thead className="bg-slate-50 text-slate-500 uppercase tracking-wider font-semibold">

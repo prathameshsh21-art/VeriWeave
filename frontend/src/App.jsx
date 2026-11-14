@@ -6,10 +6,20 @@ import DashboardPage from './pages/DashboardPage';
 import KnowledgePage from './pages/KnowledgePage';
 import SubmissionsPage from './pages/SubmissionsPage';
 import AuditPage from './pages/AuditPage';
+import AcceptInvitePage from './pages/AcceptInvitePage';
 
 function AppContent() {
   const { user, loading } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
+
+  // Check if current route is an invitation link (/invite/:token)
+  const pathname = window.location.pathname;
+  if (pathname.startsWith('/invite/')) {
+    const token = pathname.replace('/invite/', '').split('/')[0];
+    if (token) {
+      return <AcceptInvitePage token={token} />;
+    }
+  }
 
   if (loading) {
     return (

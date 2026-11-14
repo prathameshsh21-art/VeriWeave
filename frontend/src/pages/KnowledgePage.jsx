@@ -16,7 +16,9 @@ import {
   FileText,
   Search,
   RefreshCw,
-  ExternalLink
+  ExternalLink,
+  Archive,
+  GitBranch
 } from 'lucide-react';
 
 const categoryColors = {
@@ -226,10 +228,54 @@ export default function KnowledgePage() {
     }
   };
 
+  // Create New Draft Version (Evolve Guideline from Current)
+  const handleCreateDraftVersion = async () => {
+    if (!selectedSource || !selectedVersion) return;
+    try {
+      setLoading(true);
+      const res = await axiosClient.post(
+        `/workspaces/${workspaceId}/sources/${selectedSource.id}/versions?cloneFromVersionId=${selectedVersion.id}`
+      );
+      if (res.data?.success) {
+        setSuccessMsg(`New DRAFT version v${res.data.data.versionNumber} created from v${selectedVersion.versionNumber}! You can now edit candidate rules.`);
+        await fetchVersions(selectedSource.id);
+        setSelectedVersion(res.data.data);
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to create new draft version');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Archive Source
+  const handleArchiveSource = async () => {
+    if (!selectedSource) return;
+    if (!window.confirm(`Are you sure you want to archive "${selectedSource.title}"? It will no longer be retrieved during copy analysis.`)) return;
+    try {
+      setLoading(true);
+      await axiosClient.delete(`/workspaces/${workspaceId}/sources/${selectedSource.id}`);
+      setSuccessMsg(`Knowledge source "${selectedSource.title}" archived successfully.`);
+      setSelectedSource(null);
+      await fetchSources();
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to archive source');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // PDF Extraction
   const handlePdfUpload = async (e) => {
     e.preventDefault();
-    if (!pdfFile) return;
+    if (!pdfFile) {
+      setError('Please select a PDF file to import.');
+      return;
+    }
+    if (!pdfFile.name.toLowerCase().endsWith('.pdf')) {
+      setError('Unsupported file format: Only PDF documents (.pdf) are supported for knowledge extraction.');
+      return;
+    }
     const formData = new FormData();
     formData.append('file', pdfFile);
 
@@ -378,6 +424,17 @@ export default function KnowledgePage() {
                         </option>
                       ))}
                     </select>
+
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        onClick={handleArchiveSource}
+                        title="Archive Knowledge Source"
+                        className="p-1.5 rounded-lg border border-slate-200 text-slate-400 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 transition-colors ml-1"
+                      >
+                        <Archive className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -441,9 +498,22 @@ export default function KnowledgePage() {
                       )}
 
                       {selectedVersion.status !== 'DRAFT' && (
-                        <div className="flex items-center space-x-1.5 text-slate-500 bg-white border border-slate-200 px-2.5 py-1 rounded-md">
-                          <Lock className="w-3.5 h-3.5 text-slate-400" />
-                          <span>Approved version is immutable</span>
+                        <div className="flex items-center space-x-2">
+                          <div className="flex items-center space-x-1.5 text-slate-500 bg-white border border-slate-200 px-2.5 py-1 rounded-md">
+                            <Lock className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Approved version is immutable</span>
+                          </div>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={handleCreateDraftVersion}
+                              className="inline-flex items-center space-x-1.5 bg-teal-600 hover:bg-teal-700 text-white px-3 py-1.5 rounded-md font-medium transition-colors shadow-xs"
+                              title="Create a new draft version cloned from this version to update rules"
+                            >
+                              <GitBranch className="w-3.5 h-3.5" />
+                              <span>New Draft Version</span>
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>

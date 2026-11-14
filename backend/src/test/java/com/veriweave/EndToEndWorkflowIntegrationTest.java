@@ -12,6 +12,8 @@ import com.veriweave.review.dto.CreatorResponseRequest;
 import com.veriweave.review.dto.ReviewDecisionRequest;
 import com.veriweave.review.entity.CreatorAction;
 import com.veriweave.review.entity.ReviewDecisionType;
+import com.veriweave.security.RateLimitingService;
+import com.veriweave.submission.dto.CreateRevisionRequest;
 import com.veriweave.submission.dto.CreateSubmissionRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -39,6 +41,9 @@ public class EndToEndWorkflowIntegrationTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private RateLimitingService rateLimitingService;
+
     private String adminToken;
     private String creatorToken;
     private String reviewerToken;
@@ -46,6 +51,8 @@ public class EndToEndWorkflowIntegrationTest {
 
     @BeforeEach
     void setupTokens() throws Exception {
+        rateLimitingService.reset();
+
         // Authenticate with seeded demo users
         adminToken = login("admin@veriflora.com", "Secret123!");
         creatorToken = login("creator@veriflora.com", "Secret123!");
@@ -99,12 +106,12 @@ public class EndToEndWorkflowIntegrationTest {
         MvcResult analyzeResult = mockMvc.perform(post("/api/workspaces/" + workspaceId + "/submissions/" + submissionId + "/versions/" + versionId + "/analyze")
                         .header("Authorization", "Bearer " + creatorToken))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data", hasSize(greaterThanOrEqualTo(2))))
-                .andExpect(jsonPath("$.data[0].classification").value("VERIFIED"))
+                .andExpect(jsonPath("$.data.findings", hasSize(greaterThanOrEqualTo(2))))
+                .andExpect(jsonPath("$.data.findings[0].classification").value("VERIFIED"))
                 .andReturn();
 
         String findingsJson = analyzeResult.getResponse().getContentAsString();
-        long findingId = objectMapper.readTree(findingsJson).path("data").get(0).path("id").asLong();
+        long findingId = objectMapper.readTree(findingsJson).path("data").path("findings").get(0).path("id").asLong();
 
         // Step 3: Creator Responds to Finding (Modifies / Accepts)
         CreatorResponseRequest respReq = CreatorResponseRequest.builder()
@@ -150,6 +157,58 @@ public class EndToEndWorkflowIntegrationTest {
                         .header("Authorization", "Bearer " + creatorToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.status").value("CHANGES_REQUESTED"));
+
+        // Step 7: Signature Differentiator -> Guideline-to-Decision Traceability Provenance
+        mockMvc.perform(get("/api/workspaces/" + workspaceId + "/submissions/" + submissionId + "/findings/" + findingId + "/trace")
+                        .header("Authorization", "Bearer " + creatorToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.findingId").value(findingId))
+                .andExpect(jsonPath("$.data.submissionTitle").value("Spring 2026 Social Campaign"))
+                .andExpect(jsonPath("$.data.creatorAction").value("ACCEPTED"))
+                .andExpect(jsonPath("$.data.reviewerDecision").value("CHANGES_REQUESTED"))
+                .andExpect(jsonPath("$.data.ruleCode").isNotEmpty())
+                .andExpect(jsonPath("$.data.sourceTitle").isNotEmpty());
+
+        // Step 8: Creator Creates Revision (v2) Resolving the Feedback
+        CreateRevisionRequest revisionReq = CreateRevisionRequest.builder()
+                .rawText("Our botanical skincare is accessible and crafted with natural extracts.")
+                .build();
+
+        MvcResult revisionResult = mockMvc.perform(post("/api/workspaces/" + workspaceId + "/submissions/" + submissionId + "/revisions")
+                        .header("Authorization", "Bearer " + creatorToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(revisionReq)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.currentVersion.versionNumber").value(2))
+                .andExpect(jsonPath("$.data.status").value("DRAFT"))
+                .andReturn();
+
+        long version2Id = objectMapper.readTree(revisionResult.getResponse().getContentAsString())
+                .path("data").path("currentVersion").path("id").asLong();
+
+        // Step 9: Re-Analyze Revision v2
+        mockMvc.perform(post("/api/workspaces/" + workspaceId + "/submissions/" + submissionId + "/versions/" + version2Id + "/analyze")
+                        .header("Authorization", "Bearer " + creatorToken))
+                .andExpect(status().isOk());
+
+        // Step 10: Independent Reviewer Approves the Compliant Revision
+        ReviewDecisionRequest approvalDecision = ReviewDecisionRequest.builder()
+                .decision(ReviewDecisionType.APPROVED)
+                .comment("All guidelines satisfied. Approved for publication.")
+                .build();
+
+        mockMvc.perform(post("/api/workspaces/" + workspaceId + "/submissions/" + submissionId + "/versions/" + version2Id + "/decide")
+                        .header("Authorization", "Bearer " + reviewerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(approvalDecision)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.decision").value("APPROVED"));
+
+        // Step 11: Verify Submission Final Status is APPROVED
+        mockMvc.perform(get("/api/workspaces/" + workspaceId + "/submissions/" + submissionId)
+                        .header("Authorization", "Bearer " + creatorToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("APPROVED"));
     }
 
     @Test
@@ -222,5 +281,78 @@ public class EndToEndWorkflowIntegrationTest {
                         .content(objectMapper.writeValueAsString(updateReq)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message", containsString("Approved versions are immutable")));
+    }
+
+    @Test
+    @DisplayName("Separation of Duties: Admin or Reviewer who authored a submission cannot review their own copy")
+    void shouldEnforceSeparationOfDutiesWhenAdminAuthorsSubmission() throws Exception {
+        // 1. Admin creates a submission
+        CreateSubmissionRequest adminSubReq = CreateSubmissionRequest.builder()
+                .title("Admin Authored Campaign")
+                .campaignName("Leadership Announcements")
+                .rawText("Authentic herbal formulations crafted for exceptional value.")
+                .build();
+
+        MvcResult subRes = mockMvc.perform(post("/api/workspaces/" + workspaceId + "/submissions")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(adminSubReq)))
+                .andExpect(status().isCreated())
+                .andReturn();
+
+        long adminSubId = objectMapper.readTree(subRes.getResponse().getContentAsString()).path("data").path("id").asLong();
+        long adminSubVerId = objectMapper.readTree(subRes.getResponse().getContentAsString()).path("data").path("currentVersion").path("id").asLong();
+
+        // 2. Admin attempts to review / approve their own submission -> 403 Forbidden!
+        ReviewDecisionRequest selfReview = ReviewDecisionRequest.builder()
+                .decision(ReviewDecisionType.APPROVED)
+                .comment("Self review attempt by admin author")
+                .build();
+
+        mockMvc.perform(post("/api/workspaces/" + workspaceId + "/submissions/" + adminSubId + "/versions/" + adminSubVerId + "/decide")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(selfReview)))
+                .andExpect(status().isForbidden());
+
+        // 3. Independent Reviewer decides on the Admin-authored submission -> 200 OK!
+        ReviewDecisionRequest independentReview = ReviewDecisionRequest.builder()
+                .decision(ReviewDecisionType.APPROVED)
+                .comment("Independent evaluation by compliance reviewer")
+                .build();
+
+        mockMvc.perform(post("/api/workspaces/" + workspaceId + "/submissions/" + adminSubId + "/versions/" + adminSubVerId + "/decide")
+                        .header("Authorization", "Bearer " + reviewerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(independentReview)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.decision").value("APPROVED"));
+    }
+
+    @Test
+    @DisplayName("Audit Trail: ADMIN, CREATOR and REVIEWER can access workspace audit; non-members are blocked")
+    void shouldVerifyWorkspaceAuditAccessByRoleAndBlockNonMembers() throws Exception {
+        // 1. Admin accesses audit trail -> 200 OK
+        mockMvc.perform(get("/api/workspaces/" + workspaceId + "/audit")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isArray());
+
+        // 2. Creator accesses audit trail -> 200 OK
+        mockMvc.perform(get("/api/workspaces/" + workspaceId + "/audit")
+                        .header("Authorization", "Bearer " + creatorToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isArray());
+
+        // 3. Reviewer accesses audit trail -> 200 OK
+        mockMvc.perform(get("/api/workspaces/" + workspaceId + "/audit")
+                        .header("Authorization", "Bearer " + reviewerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isArray());
+
+        // 4. Request for non-existent or un-joined workspace (e.g. 99999) -> 403 Forbidden
+        mockMvc.perform(get("/api/workspaces/99999/audit")
+                        .header("Authorization", "Bearer " + creatorToken))
+                .andExpect(status().isForbidden());
     }
 }

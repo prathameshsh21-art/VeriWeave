@@ -31,8 +31,7 @@ public class AuditController {
             @PathVariable Long workspaceId,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        // Proposal §8: Only ADMIN can view audit log
-        workspaceSecurity.requireMembership(workspaceId, principal, Role.ADMIN);
+        workspaceSecurity.requireMembership(workspaceId, principal);
         List<AuditEvent> events = auditService.getWorkspaceAuditTrail(workspaceId);
         List<AuditEventDto> dtos = events.stream().map(this::toDto).collect(Collectors.toList());
         return ResponseEntity.ok(ApiResponse.success(dtos));

@@ -6,7 +6,7 @@ import {
   FileText, 
   CheckCircle, 
   Clock, 
-  Lock,
+  Lock, 
   GitCommit,
   ArrowRight,
   BookOpen,
@@ -15,24 +15,19 @@ import {
   Play
 } from 'lucide-react';
 import axiosClient from '../api/axiosClient';
+import TeamManagementSection from '../components/TeamManagementSection';
 
 export default function DashboardPage({ onNavigate }) {
   const { user, activeWorkspace } = useAuth();
-  const [backendHealth, setBackendHealth] = useState('checking');
   const [stats, setStats] = useState({
     sourcesCount: 0,
     submissionsCount: 0,
     auditCount: 0,
   });
 
-  const workspaceId = activeWorkspace?.id;
+  const workspaceId = activeWorkspace?.id || localStorage.getItem('veriweave_active_workspace_id');
 
   useEffect(() => {
-    // Probe backend connection and fetch live counts
-    axiosClient.get('/auth/me')
-      .then(() => setBackendHealth('connected'))
-      .catch(() => setBackendHealth('error'));
-
     if (workspaceId) {
       Promise.all([
         axiosClient.get(`/workspaces/${workspaceId}/sources`).catch(() => ({ data: { data: [] } })),
@@ -61,7 +56,7 @@ export default function DashboardPage({ onNavigate }) {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
       {/* Welcome Banner */}
-      <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <div className="flex items-center space-x-3">
             <h1 className="text-2xl font-bold text-slate-900">Welcome, {user?.fullName}</h1>
@@ -74,15 +69,11 @@ export default function DashboardPage({ onNavigate }) {
           </p>
         </div>
 
-        {/* Backend Connectivity Status */}
-        <div className="flex items-center space-x-3 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 self-start md:self-auto">
-          <div className={`w-2.5 h-2.5 rounded-full ${backendHealth === 'connected' ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
-          <div className="text-xs">
-            <span className="font-medium text-slate-700">Backend API: </span>
-            <span className={backendHealth === 'connected' ? 'text-emerald-700 font-semibold' : 'text-amber-700'}>
-              {backendHealth === 'connected' ? 'Operational (Spring Boot 3 + Java 17)' : 'Connecting...'}
-            </span>
-          </div>
+        <div className="flex items-center space-x-2 text-xs font-semibold">
+          <span className="text-slate-500">Role:</span>
+          <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700 border border-slate-200 font-mono">
+            {currentRole}
+          </span>
         </div>
       </div>
 
@@ -150,7 +141,7 @@ export default function DashboardPage({ onNavigate }) {
             Submissions & Review Workflow
           </h3>
           <p className="text-xs text-slate-500 leading-relaxed">
-            Execute 12-stage automated copy analysis, inspect verified passage findings, record creator responses, and commit review decisions.
+            Execute rule-based copy analysis, inspect verified passage findings, record creator responses, and commit review decisions.
           </p>
           <div className="mt-4 flex items-center text-xs font-semibold text-teal-600 group-hover:translate-x-1 transition-transform">
             <span>View Submissions</span>
@@ -181,89 +172,61 @@ export default function DashboardPage({ onNavigate }) {
         </button>
       </div>
 
-      {/* Role & Separation of Duties Card + Live Architecture Status */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm md:col-span-1">
-          <div className="flex items-center space-x-2 text-slate-800 font-semibold text-base mb-3">
-            <Lock className="w-4 h-4 text-teal-600" />
-            <h2>Your Role & Authority</h2>
+      {/* Role & Separation of Duties Card */}
+      <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4 mb-4">
+          <div className="flex items-center space-x-3">
+            <div className="p-2 bg-teal-50 border border-teal-200 rounded-lg text-teal-700">
+              <Lock className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-slate-900">Your Role & Authority</h2>
+              <p className="text-xs text-slate-500">Server-enforced access privileges and governance policies for this workspace.</p>
+            </div>
           </div>
-          <div className="mb-4">
-            <span className="text-sm font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-3 py-1 rounded-md">
+          <div>
+            <span className="text-xs font-mono font-bold text-teal-700 bg-teal-50 border border-teal-200 px-3 py-1.5 rounded-lg">
               {currentRole}
             </span>
           </div>
-          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-            Server-Enforced Privileges:
-          </p>
-          <ul className="space-y-1.5 text-xs text-slate-600">
-            {permissions.map((perm, idx) => (
-              <li key={idx} className="flex items-start space-x-2">
-                <CheckCircle className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0 mt-0.5" />
-                <span>{perm}</span>
-              </li>
-            ))}
-          </ul>
-
-          <div className="mt-5 pt-4 border-t border-slate-100 text-xs text-slate-500 bg-amber-50/60 -mx-6 -mb-6 p-4 rounded-b-xl border-amber-200/50">
-            <span className="font-semibold text-amber-800">Separation of Duties Rule:</span> A user can never approve their own submission, even if holding both Creator and Reviewer roles.
-          </div>
         </div>
 
-        {/* Milestone Progress Board */}
-        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm md:col-span-2 space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <h2 className="text-base font-semibold text-slate-900">VeriWeave MVP Implementation Status</h2>
-            <span className="text-xs font-bold text-emerald-700 bg-emerald-100 border border-emerald-200 px-2.5 py-0.5 rounded-full">
-              Round 2 MVP Complete
-            </span>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+              Server-Enforced Privileges:
+            </p>
+            <ul className="space-y-2 text-xs text-slate-600">
+              {permissions.map((perm, idx) => (
+                <li key={idx} className="flex items-start space-x-2">
+                  <CheckCircle className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0 mt-0.5" />
+                  <span>{perm}</span>
+                </li>
+              ))}
+            </ul>
           </div>
 
-          <div className="space-y-3">
-            {/* M1 */}
-            <div className="flex items-start space-x-3 p-3 bg-emerald-50/50 border border-emerald-200 rounded-lg">
-              <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-emerald-900">M1: Foundation & Security Baseline</span>
-                  <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">PASSED (4/4)</span>
-                </div>
-                <p className="text-xs text-emerald-700 mt-0.5">
-                  Spring Boot 3 + Java 17, JWT with access/refresh separation, multi-tenant workspace isolation.
-                </p>
+          <div className="bg-amber-50/70 border border-amber-200/70 rounded-xl p-4 text-xs text-slate-600 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center space-x-2 text-amber-900 font-bold mb-1">
+                <ShieldCheck className="w-4 h-4 text-amber-600" />
+                <span>Separation of Duties Rule</span>
               </div>
+              <p className="text-amber-800 leading-relaxed text-[11px] mt-1">
+                A user can never approve their own submission, even if holding both Creator and Reviewer roles. Submissions authored by your account must be reviewed and approved by an independent reviewer.
+              </p>
             </div>
-
-            {/* M2 */}
-            <div className="flex items-start space-x-3 p-3 bg-emerald-50/50 border border-emerald-200 rounded-lg">
-              <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-emerald-900">M2: Knowledge Base & Canonical SHA-256</span>
-                  <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">PASSED</span>
-                </div>
-                <p className="text-xs text-emerald-700 mt-0.5">
-                  KnowledgeSource, SourceVersion (DRAFT, CURRENT, SUPERSEDED), Apache PDFBox extractor, composite FK, canonical SHA-256.
-                </p>
-              </div>
-            </div>
-
-            {/* M3 & M4 & M5 */}
-            <div className="flex items-start space-x-3 p-3 bg-emerald-50/50 border border-emerald-200 rounded-lg">
-              <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold text-emerald-900">M3, M4, M5: Submission, Review & Audit Pipeline</span>
-                  <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">PASSED (2/2)</span>
-                </div>
-                <p className="text-xs text-emerald-700 mt-0.5">
-                  12-stage analysis, character offsets, deterministic EvidenceValidator, creator Accept/Modify/Reject, reviewer override, tamper-evident audit events.
-                </p>
-              </div>
+            <div className="mt-3 text-[10px] text-amber-700/80 font-mono">
+              Enforced at backend controller & service layer with HTTP 403 Forbidden on self-review.
             </div>
           </div>
         </div>
       </div>
+
+      {/* Team & Member Management Section - Strictly for ADMIN */}
+      {currentRole === 'ADMIN' && (
+        <TeamManagementSection workspaceId={workspaceId} currentRole={currentRole} />
+      )}
     </div>
   );
 }

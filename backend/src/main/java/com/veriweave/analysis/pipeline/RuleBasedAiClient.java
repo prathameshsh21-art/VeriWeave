@@ -124,6 +124,15 @@ public class RuleBasedAiClient implements AiClient {
     }
 
     private String generateSuggestedEdit(KnowledgeEntry entry, String passageQuote, String matchedText) {
-        return passageQuote.replace(matchedText, "[" + entry.getCode() + " approved alternative]");
+        if (entry != null && entry.getText() != null) {
+            String ruleText = entry.getText();
+            Matcher m = Pattern.compile("(?:use|instead use|replace with|prefer|say)\\s+[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE).matcher(ruleText);
+            if (m.find()) {
+                String replacement = m.group(1).trim();
+                return passageQuote.replace(matchedText, replacement);
+            }
+        }
+        String code = entry != null && entry.getCode() != null ? entry.getCode() : "RULE";
+        return passageQuote.replace(matchedText, "[" + code + " approved alternative]");
     }
 }

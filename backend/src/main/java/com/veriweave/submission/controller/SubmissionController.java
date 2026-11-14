@@ -3,22 +3,33 @@ package com.veriweave.submission.controller;
 import com.veriweave.analysis.dto.AnalysisRunDto;
 import com.veriweave.analysis.dto.AnalysisResponseDto;
 import com.veriweave.analysis.dto.FindingDto;
+import com.veriweave.analysis.dto.FindingTraceabilityDto;
 import com.veriweave.analysis.entity.AnalysisRun;
 import com.veriweave.analysis.entity.Finding;
 import com.veriweave.analysis.entity.FindingClassification;
 import com.veriweave.analysis.repository.AnalysisRunRepository;
+import com.veriweave.analysis.repository.FindingRepository;
 import com.veriweave.analysis.service.AnalysisPipelineService;
+import com.veriweave.audit.dto.AuditEventDto;
+import com.veriweave.audit.entity.AuditEvent;
+import com.veriweave.audit.repository.AuditEventRepository;
 import com.veriweave.common.ApiResponse;
+import com.veriweave.knowledge.entity.KnowledgeEntry;
+import com.veriweave.knowledge.entity.KnowledgeSource;
+import com.veriweave.knowledge.entity.SourceVersion;
 import com.veriweave.review.dto.CreatorResponseRequest;
 import com.veriweave.review.dto.FindingResponseDto;
 import com.veriweave.review.dto.ReviewDecisionDto;
 import com.veriweave.review.dto.ReviewDecisionRequest;
 import com.veriweave.review.entity.FindingResponse;
+import com.veriweave.review.entity.ReviewDecision;
 import com.veriweave.review.repository.FindingResponseRepository;
+import com.veriweave.review.repository.ReviewDecisionRepository;
 import com.veriweave.review.service.ReviewService;
 import com.veriweave.security.UserPrincipal;
 import com.veriweave.security.WorkspaceSecurityService;
 import com.veriweave.submission.dto.ContentVersionDto;
+import com.veriweave.submission.dto.CreateRevisionRequest;
 import com.veriweave.submission.dto.CreateSubmissionRequest;
 import com.veriweave.submission.dto.SubmissionDetailDto;
 import com.veriweave.submission.dto.SubmissionDto;
@@ -52,6 +63,9 @@ public class SubmissionController {
     private final FindingResponseRepository findingResponseRepository;
     private final SubmissionRepository submissionRepository;
     private final AnalysisRunRepository analysisRunRepository;
+    private final FindingRepository findingRepository;
+    private final ReviewDecisionRepository reviewDecisionRepository;
+    private final AuditEventRepository auditEventRepository;
 
     @PostMapping
     public ResponseEntity<ApiResponse<SubmissionDto>> createSubmission(
@@ -160,11 +174,11 @@ public class SubmissionController {
     public ResponseEntity<ApiResponse<SubmissionDto>> createRevision(
             @PathVariable Long workspaceId,
             @PathVariable Long submissionId,
-            @RequestBody String newRawText,
+            @Valid @RequestBody CreateRevisionRequest request,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
         workspaceSecurity.requireMembership(workspaceId, principal, Role.ADMIN, Role.MANAGER, Role.CREATOR);
-        SubmissionDto dto = submissionService.createRevision(workspaceId, submissionId, newRawText, principal);
+        SubmissionDto dto = submissionService.createRevision(workspaceId, submissionId, request.getRawText(), principal);
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.success("Revision created", dto));
     }
 
@@ -276,6 +290,124 @@ public class SubmissionController {
         workspaceSecurity.requireMembership(workspaceId, principal);
         List<ReviewDecisionDto> decisions = reviewService.getSubmissionDecisions(workspaceId, submissionId);
         return ResponseEntity.ok(ApiResponse.success(decisions));
+    }
+
+    @GetMapping("/{submissionId}/findings/{findingId}/trace")
+    public ResponseEntity<ApiResponse<FindingTraceabilityDto>> getFindingTraceability(
+            @PathVariable Long workspaceId,
+            @PathVariable Long submissionId,
+            @PathVariable Long findingId,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        workspaceSecurity.requireMembership(workspaceId, principal);
+
+        Submission submission = submissionRepository.findByIdAndWorkspaceId(submissionId, workspaceId)
+                .orElseThrow(() -> new AccessDeniedException("Submission not found in workspace: " + submissionId));
+
+        Finding finding = findingRepository.findById(findingId)
+                .orElseThrow(() -> new AccessDeniedException("Finding not found: " + findingId));
+
+        if (!finding.getContentVersion().getSubmission().getId().equals(submissionId)) {
+            throw new AccessDeniedException("Finding does not belong to submission: " + submissionId);
+        }
+
+        ContentVersion cv = finding.getContentVersion();
+        KnowledgeEntry entry = finding.getKnowledgeEntry();
+        SourceVersion sv = finding.getSourceVersion() != null ? finding.getSourceVersion()
+                : (entry != null ? entry.getSourceVersion() : null);
+        KnowledgeSource source = sv != null ? sv.getSource() : null;
+
+        Optional<FindingResponse> responseOpt = findingResponseRepository.findByFindingId(findingId);
+        Optional<ReviewDecision> decisionOpt = reviewDecisionRepository.findFirstByContentVersionId(cv.getId());
+
+        List<AuditEvent> auditEvents = auditEventRepository.findAllByWorkspaceIdOrderByCreatedAtDesc(workspaceId);
+        List<AuditEventDto> traceAuditTrail = auditEvents.stream()
+                .filter(a -> (a.getEntityType() != null && a.getEntityType().equalsIgnoreCase("SUBMISSION") && a.getEntityId().equals(submissionId))
+                        || (a.getEntityType() != null && a.getEntityType().equalsIgnoreCase("FINDING") && a.getEntityId().equals(findingId)))
+                .map(this::toAuditDto)
+                .collect(Collectors.toList());
+
+        FindingTraceabilityDto traceDto = FindingTraceabilityDto.builder()
+                // 1. Submitted Sentence & Content Context
+                .submissionId(submission.getId())
+                .submissionTitle(submission.getTitle())
+                .contentVersionId(cv.getId())
+                .contentVersionNumber(cv.getVersionNumber())
+                .submissionAuthor(submission.getCreatedBy() != null ? submission.getCreatedBy().getFullName() : "Unknown Author")
+                .submissionCreatedAt(submission.getCreatedAt())
+                .rawText(cv.getRawText())
+
+                // 2. Deterministic Finding
+                .findingId(finding.getId())
+                .analysisRunId(finding.getAnalysisRun() != null ? finding.getAnalysisRun().getId() : null)
+                .findingType(finding.getType())
+                .category(finding.getCategory())
+                .classification(finding.getClassification())
+                .severity(finding.getSeverity())
+                .passageStart(finding.getPassageStart())
+                .passageEnd(finding.getPassageEnd())
+                .passageQuote(finding.getPassageQuote())
+                .explanation(finding.getExplanation())
+                .suggestedEdit(finding.getSuggestedEdit())
+                .confidence(finding.getConfidence())
+                .findingCreatedAt(finding.getCreatedAt())
+
+                // 3. Approved Guideline & Evidence Provenance
+                .knowledgeEntryId(entry != null ? entry.getId() : null)
+                .ruleCode(entry != null ? entry.getCode() : "ADVISORY")
+                .ruleText(entry != null ? entry.getText() : null)
+                .pageOrSectionReference(entry != null ? entry.getPageOrSectionReference() : null)
+                .sourceId(source != null ? source.getId() : null)
+                .sourceTitle(source != null ? source.getTitle() : null)
+                .sourceType(source != null && source.getType() != null ? source.getType().name() : null)
+                .sourceVersionNumber(sv != null ? sv.getVersionNumber() : null)
+                .sourceVersionChecksum(sv != null ? sv.getChecksum() : null)
+                .sourceStatus(sv != null && sv.getStatus() != null ? sv.getStatus().name() : null)
+                .evidenceQuote(finding.getEvidenceQuote())
+
+                // 4. Creator Response & Revision
+                .responseId(responseOpt.map(FindingResponse::getId).orElse(null))
+                .creatorAction(responseOpt.map(FindingResponse::getAction).orElse(null))
+                .creatorReason(responseOpt.map(FindingResponse::getReason).orElse(null))
+                .creatorModifiedText(responseOpt.map(FindingResponse::getModifiedText).orElse(null))
+                .creatorRespondedBy(responseOpt.map(r -> r.getUser() != null ? r.getUser().getFullName() : null).orElse(null))
+                .creatorRespondedAt(responseOpt.map(FindingResponse::getCreatedAt).orElse(null))
+
+                // 5. Reviewer Decision
+                .decisionId(decisionOpt.map(ReviewDecision::getId).orElse(null))
+                .reviewerDecision(decisionOpt.map(ReviewDecision::getDecision).orElse(null))
+                .reviewerName(decisionOpt.map(d -> d.getReviewer() != null ? d.getReviewer().getFullName() : null).orElse(null))
+                .reviewerComment(decisionOpt.map(ReviewDecision::getComment).orElse(null))
+                .overrideReason(decisionOpt.map(ReviewDecision::getOverrideReason).orElse(null))
+                .decidedAt(decisionOpt.map(ReviewDecision::getCreatedAt).orElse(null))
+
+                // 6. Complete Immutable Audit Trail
+                .auditTrail(traceAuditTrail)
+                .build();
+
+        return ResponseEntity.ok(ApiResponse.success(traceDto));
+    }
+
+    private AuditEventDto toAuditDto(AuditEvent event) {
+        AuditEventDto.ActorDto actorDto = null;
+        if (event.getActor() != null) {
+            actorDto = AuditEventDto.ActorDto.builder()
+                    .id(event.getActor().getId())
+                    .email(event.getActor().getEmail())
+                    .fullName(event.getActor().getFullName())
+                    .build();
+        }
+        return AuditEventDto.builder()
+                .id(event.getId())
+                .workspaceId(event.getWorkspace() != null ? event.getWorkspace().getId() : null)
+                .actor(actorDto)
+                .action(event.getAction())
+                .entityType(event.getEntityType())
+                .entityId(event.getEntityId())
+                .metadata(event.getMetadata())
+                .createdAt(event.getCreatedAt())
+                .timestamp(event.getCreatedAt())
+                .build();
     }
 
     private FindingDto toFindingDto(Finding f) {

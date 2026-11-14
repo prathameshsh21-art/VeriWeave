@@ -47,6 +47,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             if (StringUtils.hasText(userEmail) && SecurityContextHolder.getContext().getAuthentication() == null) {
                 UserDetails userDetails = this.userDetailsService.loadUserByUsername(userEmail);
                 if (jwtService.isAccessToken(jwt, userDetails.getUsername())) {
+                    if (userDetails instanceof UserPrincipal principal) {
+                        Integer tokenVersion = jwtService.extractTokenVersion(jwt);
+                        if (tokenVersion != null && tokenVersion != principal.getTokenVersion()) {
+                            log.warn("Rejected revoked token for user {}: token version {} != current {}", userEmail, tokenVersion, principal.getTokenVersion());
+                            filterChain.doFilter(request, response);
+                            return;
+                        }
+                        if (!principal.isEnabled()) {
+                            log.warn("Rejected token for unverified/disabled user: {}", userEmail);
+                            filterChain.doFilter(request, response);
+                            return;
+                        }
+                    }
                     UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
                             userDetails,
                             null,

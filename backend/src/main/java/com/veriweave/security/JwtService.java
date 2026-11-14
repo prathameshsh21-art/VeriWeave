@@ -25,6 +25,16 @@ public class JwtService {
     @Value("${veriweave.jwt.refresh-expiration-ms}")
     private long jwtRefreshExpirationMs;
 
+    @jakarta.annotation.PostConstruct
+    public void validateConfiguration() {
+        if (jwtSecret == null || jwtSecret.trim().isEmpty()) {
+            throw new IllegalStateException("FATAL: JWT signing secret is missing. Set the VERIWEAVE_JWT_SECRET environment variable with at least 32 characters (256 bits).");
+        }
+        if (jwtSecret.getBytes(StandardCharsets.UTF_8).length < 32) {
+            throw new IllegalStateException("FATAL: JWT signing secret must be at least 256 bits (32 bytes) long. Provided secret is only " + jwtSecret.getBytes(StandardCharsets.UTF_8).length + " bytes.");
+        }
+    }
+
     private SecretKey getSigningKey() {
         byte[] keyBytes = jwtSecret.getBytes(StandardCharsets.UTF_8);
         return Keys.hmacShaKeyFor(keyBytes);
@@ -43,22 +53,41 @@ public class JwtService {
         return null;
     }
 
+    public Integer extractTokenVersion(String token) {
+        Claims claims = extractAllClaims(token);
+        Object version = claims.get("tokenVersion");
+        if (version instanceof Number number) {
+            return number.intValue();
+        }
+        return null;
+    }
+
     public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
         final Claims claims = extractAllClaims(token);
         return claimsResolver.apply(claims);
     }
 
     public String generateAccessToken(Long userId, String email, String fullName) {
+        return generateAccessToken(userId, email, fullName, 1);
+    }
+
+    public String generateAccessToken(Long userId, String email, String fullName, int tokenVersion) {
         Map<String, Object> extraClaims = new HashMap<>();
         extraClaims.put("userId", userId);
         extraClaims.put("fullName", fullName);
+        extraClaims.put("tokenVersion", tokenVersion);
         extraClaims.put("tokenType", "ACCESS");
         return buildToken(extraClaims, email, jwtExpirationMs);
     }
 
     public String generateRefreshToken(Long userId, String email) {
+        return generateRefreshToken(userId, email, 1);
+    }
+
+    public String generateRefreshToken(Long userId, String email, int tokenVersion) {
         Map<String, Object> extraClaims = new HashMap<>();
         extraClaims.put("userId", userId);
+        extraClaims.put("tokenVersion", tokenVersion);
         extraClaims.put("tokenType", "REFRESH");
         return buildToken(extraClaims, email, jwtRefreshExpirationMs);
     }

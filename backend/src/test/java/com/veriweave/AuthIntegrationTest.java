@@ -6,6 +6,8 @@ import com.veriweave.auth.dto.LoginRequest;
 import com.veriweave.auth.dto.RefreshTokenRequest;
 import com.veriweave.auth.dto.RegisterRequest;
 import com.veriweave.security.JwtService;
+import com.veriweave.security.RateLimitingService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,6 +36,14 @@ public class AuthIntegrationTest {
 
     @Autowired
     private JwtService jwtService;
+
+    @Autowired
+    private RateLimitingService rateLimitingService;
+
+    @BeforeEach
+    void setUp() {
+        rateLimitingService.reset();
+    }
 
     @Test
     @DisplayName("User registration grants ADMIN role on initial workspace, and JWT login succeeds")

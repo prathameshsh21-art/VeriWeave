@@ -51,11 +51,13 @@ public class DemoDataSeeder implements CommandLineRunner {
                 .build();
         workspace = workspaceRepository.save(workspace);
 
-        // 2. Create Users
+        // 2. Create Users (Pre-verified for instant hackathon judge evaluation)
         User admin = User.builder()
                 .email("admin@veriflora.com")
                 .fullName("Elena Vance (Brand Director)")
                 .passwordHash(passwordEncoder.encode("Secret123!"))
+                .emailVerified(true)
+                .tokenVersion(1)
                 .build();
         admin = userRepository.save(admin);
 
@@ -63,6 +65,8 @@ public class DemoDataSeeder implements CommandLineRunner {
                 .email("creator@veriflora.com")
                 .fullName("Marcus Chen (Content Creator)")
                 .passwordHash(passwordEncoder.encode("Secret123!"))
+                .emailVerified(true)
+                .tokenVersion(1)
                 .build();
         creator = userRepository.save(creator);
 
@@ -70,6 +74,8 @@ public class DemoDataSeeder implements CommandLineRunner {
                 .email("reviewer@veriflora.com")
                 .fullName("Sarah Jenkins (Compliance Reviewer)")
                 .passwordHash(passwordEncoder.encode("Secret123!"))
+                .emailVerified(true)
+                .tokenVersion(1)
                 .build();
         reviewer = userRepository.save(reviewer);
 
