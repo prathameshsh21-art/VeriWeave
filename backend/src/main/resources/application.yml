@@ -32,19 +32,24 @@ spring:
     properties:
       mail:
         smtp:
-          auth: true
+          auth: ${SPRING_MAIL_AUTH:true}
           starttls:
-            enable: true
-            required: true
+            enable: ${SPRING_MAIL_STARTTLS_ENABLE:true}
+            required: ${SPRING_MAIL_STARTTLS_REQUIRED:true}
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
 
 # VeriWeave Security, CORS & Mail Configuration
 veriweave:
   cors:
-    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173,https://veriweave-frontend.onrender.com}
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173,https://veriweave-frontend.onrender.com,https://veriweave.xyz,https://www.veriweave.xyz}
   jwt:
     # Requires 256-bit secret via VERIWEAVE_JWT_SECRET (or JWT_SECRET). No hardcoded fallback.
     secret: ${VERIWEAVE_JWT_SECRET:${JWT_SECRET:}}
     expiration-ms: 86400000 # 24 hours
     refresh-expiration-ms: 604800000 # 7 days
+  frontend:
+    url: ${VERIWEAVE_FRONTEND_URL:${VERIWEAVE_FRONTEND_BASE_URL:${FRONTEND_URL:https://veriweave-frontend.onrender.com}}}
   mail:
     from: ${VERIWEAVE_MAIL_FROM:no-reply@veriweave.com}

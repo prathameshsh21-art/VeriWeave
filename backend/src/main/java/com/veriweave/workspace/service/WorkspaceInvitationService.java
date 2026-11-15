@@ -3,6 +3,7 @@ package com.veriweave.workspace.service;
 import com.veriweave.auth.dto.AuthResponse;
 import com.veriweave.auth.dto.UserDto;
 import com.veriweave.auth.dto.WorkspaceDto;
+import com.veriweave.common.email.EmailDeliveryResult;
 import com.veriweave.common.email.EmailService;
 import com.veriweave.security.JwtService;
 import com.veriweave.security.UserPrincipal;
@@ -21,6 +22,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -45,6 +47,13 @@ public class WorkspaceInvitationService {
 
     @Value("${veriweave.frontend.url:https://veriweave-frontend.onrender.com}")
     private String frontendUrl;
+
+    public String getNormalizedFrontendUrl() {
+        if (!StringUtils.hasText(frontendUrl)) {
+            return "https://veriweave-frontend.onrender.com";
+        }
+        return frontendUrl.trim().replaceAll("/+$", "");
+    }
 
     @Transactional
     public WorkspaceInvitationDto createInvitation(Long workspaceId, CreateInvitationRequest request, UserPrincipal principal) {
@@ -71,33 +80,82 @@ public class WorkspaceInvitationService {
             }
         }
 
-        // Revoke any existing pending invitations for this email in this workspace
-        invitationRepository.findByWorkspaceIdAndEmailAndStatus(workspaceId, normalizedEmail, InvitationStatus.PENDING)
-                .ifPresent(existing -> {
-                    existing.setStatus(InvitationStatus.REVOKED);
-                    invitationRepository.save(existing);
-                });
+        // Safe retry / idempotency without duplicate active invitations:
+        // If an invitation is already PENDING for this email in this workspace, update role, extend expiry and re-dispatch.
+        Optional<WorkspaceInvitation> existingPending = invitationRepository
+                .findByWorkspaceIdAndEmailAndStatus(workspaceId, normalizedEmail, InvitationStatus.PENDING);
 
-        String token = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
-        Instant expiresAt = Instant.now().plus(7, ChronoUnit.DAYS);
+        WorkspaceInvitation invitation;
+        if (existingPending.isPresent()) {
+            invitation = existingPending.get();
+            invitation.setRole(request.getRole());
+            invitation.setExpiresAt(Instant.now().plus(7, ChronoUnit.DAYS));
+            invitation = invitationRepository.save(invitation);
+            log.info("Refreshed existing pending invitation {} for {} in workspace {}", invitation.getId(), normalizedEmail, workspace.getName());
+        } else {
+            String token = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+            Instant expiresAt = Instant.now().plus(7, ChronoUnit.DAYS);
 
-        WorkspaceInvitation invitation = WorkspaceInvitation.builder()
-                .workspace(workspace)
-                .email(normalizedEmail)
-                .role(request.getRole())
-                .token(token)
-                .status(InvitationStatus.PENDING)
-                .invitedBy(inviter)
-                .expiresAt(expiresAt)
-                .build();
+            invitation = WorkspaceInvitation.builder()
+                    .workspace(workspace)
+                    .email(normalizedEmail)
+                    .role(request.getRole())
+                    .token(token)
+                    .status(InvitationStatus.PENDING)
+                    .invitedBy(inviter)
+                    .expiresAt(expiresAt)
+                    .build();
 
+            invitation = invitationRepository.save(invitation);
+            log.info("Created new workspace invitation {} for {} in workspace {}", invitation.getId(), normalizedEmail, workspace.getName());
+        }
+
+        String inviteUrl = getNormalizedFrontendUrl() + "/invite/" + invitation.getToken();
+        EmailDeliveryResult result = emailService.sendWorkspaceInvitation(
+                normalizedEmail,
+                workspace.getName(),
+                invitation.getRole().name(),
+                inviteUrl
+        );
+
+        WorkspaceInvitationDto dto = toDto(invitation);
+        dto.setEmailDelivered(result.isDelivered());
+        dto.setDeliveryMessage(result.getMessage());
+        return dto;
+    }
+
+    @Transactional
+    public WorkspaceInvitationDto resendInvitation(Long workspaceId, Long invitationId, UserPrincipal principal) {
+        workspaceSecurity.requireMembership(workspaceId, principal, Role.ADMIN);
+
+        WorkspaceInvitation invitation = invitationRepository.findById(invitationId)
+                .orElseThrow(() -> new IllegalArgumentException("Invitation not found: " + invitationId));
+
+        if (!invitation.getWorkspace().getId().equals(workspaceId)) {
+            throw new IllegalArgumentException("Invitation does not belong to the specified workspace.");
+        }
+
+        if (invitation.getStatus() != InvitationStatus.PENDING) {
+            throw new IllegalArgumentException("Only pending invitations can be resent.");
+        }
+
+        // Refresh expiry by 7 days
+        invitation.setExpiresAt(Instant.now().plus(7, ChronoUnit.DAYS));
         invitation = invitationRepository.save(invitation);
 
-        String inviteUrl = frontendUrl + "/invite/" + token;
-        emailService.sendWorkspaceInvitation(normalizedEmail, workspace.getName(), request.getRole().name(), inviteUrl);
+        String inviteUrl = getNormalizedFrontendUrl() + "/invite/" + invitation.getToken();
+        EmailDeliveryResult result = emailService.sendWorkspaceInvitation(
+                invitation.getEmail(),
+                invitation.getWorkspace().getName(),
+                invitation.getRole().name(),
+                inviteUrl
+        );
 
-        log.info("Workspace invitation {} created for {} in workspace {}", invitation.getId(), normalizedEmail, workspace.getName());
-        return toDto(invitation);
+        log.info("Invitation {} resent to {} by admin {}", invitationId, invitation.getEmail(), principal.getEmail());
+        WorkspaceInvitationDto dto = toDto(invitation);
+        dto.setEmailDelivered(result.isDelivered());
+        dto.setDeliveryMessage(result.getMessage());
+        return dto;
     }
 
     @Transactional(readOnly = true)
@@ -247,7 +305,9 @@ public class WorkspaceInvitationService {
                 .status(invitation.getStatus().name())
                 .invitedByEmail(invitation.getInvitedBy().getEmail())
                 .token(invitation.getToken())
-                .inviteUrl(frontendUrl + "/invite/" + invitation.getToken())
+                .inviteUrl(getNormalizedFrontendUrl() + "/invite/" + invitation.getToken())
+                .emailDelivered(emailService.isConfigured())
+                .deliveryMessage(emailService.isConfigured() ? "Email dispatched" : "SMTP unconfigured - copy invite link directly")
                 .expiresAt(invitation.getExpiresAt())
                 .createdAt(invitation.getCreatedAt())
                 .build();

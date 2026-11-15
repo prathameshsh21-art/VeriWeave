@@ -315,6 +315,11 @@ public class EndToEndWorkflowIntegrationTest {
                         .content(objectMapper.writeValueAsString(selfReview)))
                 .andExpect(status().isForbidden());
 
+        // Analyze submission so it transitions from DRAFT to IN_REVIEW before independent review
+        mockMvc.perform(post("/api/workspaces/" + workspaceId + "/submissions/" + adminSubId + "/versions/" + adminSubVerId + "/analyze")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk());
+
         // 3. Independent Reviewer decides on the Admin-authored submission -> 200 OK!
         ReviewDecisionRequest independentReview = ReviewDecisionRequest.builder()
                 .decision(ReviewDecisionType.APPROVED)

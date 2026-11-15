@@ -55,6 +55,17 @@ public class WorkspaceInvitationController {
         return ResponseEntity.ok(ApiResponse.success(null));
     }
 
+    @PostMapping("/api/workspaces/{workspaceId}/invitations/{invitationId}/resend")
+    public ResponseEntity<ApiResponse<WorkspaceInvitationDto>> resendInvitation(
+            @PathVariable Long workspaceId,
+            @PathVariable Long invitationId,
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        rateLimitingService.checkRateLimit("ws_resend_invite:" + workspaceId, 15, 3600);
+        WorkspaceInvitationDto dto = invitationService.resendInvitation(workspaceId, invitationId, principal);
+        return ResponseEntity.ok(ApiResponse.success(dto));
+    }
+
     @GetMapping("/api/auth/invitations/{token}")
     public ResponseEntity<ApiResponse<WorkspaceInvitationDto>> getInvitationByToken(
             @PathVariable String token

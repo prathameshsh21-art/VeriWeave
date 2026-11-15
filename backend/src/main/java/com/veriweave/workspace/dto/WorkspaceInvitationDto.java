@@ -20,6 +20,8 @@ public class WorkspaceInvitationDto {
     private String invitedByEmail;
     private String token;
     private String inviteUrl;
+    private boolean emailDelivered;
+    private String deliveryMessage;
     private Instant expiresAt;
     private Instant createdAt;
 }

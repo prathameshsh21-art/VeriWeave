@@ -67,6 +67,19 @@ public class SubmissionController {
     private final ReviewDecisionRepository reviewDecisionRepository;
     private final AuditEventRepository auditEventRepository;
 
+    private Submission validateSubmissionAccess(Long workspaceId, Long submissionId, UserPrincipal principal) {
+        var membership = workspaceSecurity.requireMembership(workspaceId, principal);
+        Submission submission = submissionRepository.findByIdAndWorkspaceId(submissionId, workspaceId)
+                .orElseThrow(() -> new AccessDeniedException("Submission not found in workspace: " + submissionId));
+
+        if (membership.getRole() == Role.CREATOR) {
+            if (submission.getCreatedBy() == null || !submission.getCreatedBy().getId().equals(principal.getId())) {
+                throw new AccessDeniedException("Access denied: Creators can only access their own submissions.");
+            }
+        }
+        return submission;
+    }
+
     @PostMapping
     public ResponseEntity<ApiResponse<SubmissionDto>> createSubmission(
             @PathVariable Long workspaceId,
@@ -95,9 +108,7 @@ public class SubmissionController {
             @PathVariable Long submissionId,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        workspaceSecurity.requireMembership(workspaceId, principal);
-        Submission sub = submissionRepository.findByIdAndWorkspaceId(submissionId, workspaceId)
-                .orElseThrow(() -> new AccessDeniedException("Submission not found in workspace: " + submissionId));
+        Submission sub = validateSubmissionAccess(workspaceId, submissionId, principal);
 
         ContentVersion cv = sub.getCurrentVersion();
         Long versionId = cv != null ? cv.getId() : null;
@@ -177,6 +188,7 @@ public class SubmissionController {
             @Valid @RequestBody CreateRevisionRequest request,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
+        validateSubmissionAccess(workspaceId, submissionId, principal);
         workspaceSecurity.requireMembership(workspaceId, principal, Role.ADMIN, Role.MANAGER, Role.CREATOR);
         SubmissionDto dto = submissionService.createRevision(workspaceId, submissionId, request.getRawText(), principal);
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.success("Revision created", dto));
@@ -188,7 +200,7 @@ public class SubmissionController {
             @PathVariable Long submissionId,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        workspaceSecurity.requireMembership(workspaceId, principal);
+        validateSubmissionAccess(workspaceId, submissionId, principal);
         List<ContentVersionDto> versions = submissionService.listVersions(workspaceId, submissionId);
         return ResponseEntity.ok(ApiResponse.success(versions));
     }
@@ -202,11 +214,10 @@ public class SubmissionController {
             @PathVariable(required = false) Long versionId,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
+        Submission sub = validateSubmissionAccess(workspaceId, submissionId, principal);
         workspaceSecurity.requireMembership(workspaceId, principal, Role.ADMIN, Role.MANAGER, Role.CREATOR);
         Long targetVersionId = versionId;
         if (targetVersionId == null) {
-            Submission sub = submissionRepository.findByIdAndWorkspaceId(submissionId, workspaceId)
-                    .orElseThrow(() -> new AccessDeniedException("Submission not found in workspace: " + submissionId));
             targetVersionId = sub.getCurrentVersion() != null ? sub.getCurrentVersion().getId() : 1L;
         }
         List<Finding> findings = pipelineService.runAnalysis(workspaceId, submissionId, targetVersionId, principal.getId());
@@ -233,11 +244,9 @@ public class SubmissionController {
             @PathVariable(required = false) Long versionId,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        workspaceSecurity.requireMembership(workspaceId, principal);
+        Submission sub = validateSubmissionAccess(workspaceId, submissionId, principal);
         Long targetVersionId = versionId;
         if (targetVersionId == null) {
-            Submission sub = submissionRepository.findByIdAndWorkspaceId(submissionId, workspaceId)
-                    .orElseThrow(() -> new AccessDeniedException("Submission not found in workspace: " + submissionId));
             targetVersionId = sub.getCurrentVersion() != null ? sub.getCurrentVersion().getId() : 1L;
         }
         List<Finding> findings = pipelineService.getFindingsForVersion(workspaceId, submissionId, targetVersionId);
@@ -255,6 +264,7 @@ public class SubmissionController {
             @Valid @RequestBody CreatorResponseRequest request,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
+        validateSubmissionAccess(workspaceId, submissionId, principal);
         workspaceSecurity.requireMembership(workspaceId, principal, Role.ADMIN, Role.CREATOR);
         FindingResponseDto dto = reviewService.respondToFinding(workspaceId, submissionId, findingId, request, principal);
         return ResponseEntity.ok(ApiResponse.success("Response recorded", dto));
@@ -271,10 +281,10 @@ public class SubmissionController {
             @AuthenticationPrincipal UserPrincipal principal
     ) {
         workspaceSecurity.requireMembership(workspaceId, principal, Role.ADMIN, Role.REVIEWER);
+        Submission sub = submissionRepository.findByIdAndWorkspaceId(submissionId, workspaceId)
+                .orElseThrow(() -> new AccessDeniedException("Submission not found in workspace: " + submissionId));
         Long targetVersionId = versionId;
         if (targetVersionId == null) {
-            Submission sub = submissionRepository.findByIdAndWorkspaceId(submissionId, workspaceId)
-                    .orElseThrow(() -> new AccessDeniedException("Submission not found in workspace: " + submissionId));
             targetVersionId = sub.getCurrentVersion() != null ? sub.getCurrentVersion().getId() : 1L;
         }
         ReviewDecisionDto dto = reviewService.recordReviewDecision(workspaceId, submissionId, targetVersionId, request, principal);
@@ -287,7 +297,7 @@ public class SubmissionController {
             @PathVariable Long submissionId,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        workspaceSecurity.requireMembership(workspaceId, principal);
+        validateSubmissionAccess(workspaceId, submissionId, principal);
         List<ReviewDecisionDto> decisions = reviewService.getSubmissionDecisions(workspaceId, submissionId);
         return ResponseEntity.ok(ApiResponse.success(decisions));
     }
@@ -299,10 +309,7 @@ public class SubmissionController {
             @PathVariable Long findingId,
             @AuthenticationPrincipal UserPrincipal principal
     ) {
-        workspaceSecurity.requireMembership(workspaceId, principal);
-
-        Submission submission = submissionRepository.findByIdAndWorkspaceId(submissionId, workspaceId)
-                .orElseThrow(() -> new AccessDeniedException("Submission not found in workspace: " + submissionId));
+        Submission submission = validateSubmissionAccess(workspaceId, submissionId, principal);
 
         Finding finding = findingRepository.findById(findingId)
                 .orElseThrow(() -> new AccessDeniedException("Finding not found: " + findingId));

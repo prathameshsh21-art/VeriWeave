@@ -1,25 +1,28 @@
 package com.veriweave.common.email;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.mail.MailException;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import javax.net.ssl.SSLSocket;
-import javax.net.ssl.SSLSocketFactory;
-import java.io.*;
-import java.net.Socket;
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
+import java.util.Properties;
 
 /**
- * Standard RFC 5321 SMTP Client using Java 17 Standard Networking.
+ * Enterprise Production Email Service using Spring Boot JavaMailSender.
+ * Supports TLS / STARTTLS (port 587) and SSL (port 465).
  * Fully compatible with AWS SES, SendGrid, Mailgun, Postmark, and Gmail SMTP.
- * Requires zero external maven dependencies.
  */
 @Slf4j
 @Service
 public class EmailService {
+
+    @Autowired(required = false)
+    private JavaMailSender mailSender;
 
     @Value("${spring.mail.host:}")
     private String mailHost;
@@ -36,19 +39,71 @@ public class EmailService {
     @Value("${veriweave.mail.from:no-reply@veriweave.com}")
     private String mailFrom;
 
+    @Value("${spring.mail.properties.mail.smtp.starttls.enable:true}")
+    private boolean starttlsEnable;
+
+    @Value("${spring.mail.properties.mail.smtp.starttls.required:true}")
+    private boolean starttlsRequired;
+
+    @Value("${spring.mail.properties.mail.smtp.auth:true}")
+    private boolean smtpAuth;
+
+    private JavaMailSender dynamicSender;
+
     /**
      * Checks whether an external SMTP email provider is configured.
-     * In accordance with production readiness criteria, unconfigured providers must not be faked.
      */
     public boolean isConfigured() {
         return StringUtils.hasText(mailHost) && !mailHost.trim().isEmpty();
     }
 
+    private synchronized JavaMailSender getMailSender() {
+        if (mailSender != null) {
+            return mailSender;
+        }
+        if (dynamicSender != null) {
+            return dynamicSender;
+        }
+        if (!isConfigured()) {
+            return null;
+        }
+
+        JavaMailSenderImpl sender = new JavaMailSenderImpl();
+        sender.setHost(mailHost.trim());
+        sender.setPort(mailPort);
+        sender.setDefaultEncoding("UTF-8");
+
+        if (StringUtils.hasText(mailUsername)) {
+            sender.setUsername(mailUsername.trim());
+        }
+        if (StringUtils.hasText(mailPassword)) {
+            sender.setPassword(mailPassword);
+        }
+
+        Properties props = sender.getJavaMailProperties();
+        props.put("mail.transport.protocol", "smtp");
+        props.put("mail.smtp.auth", String.valueOf(smtpAuth));
+        props.put("mail.smtp.starttls.enable", String.valueOf(starttlsEnable));
+        props.put("mail.smtp.starttls.required", String.valueOf(starttlsRequired));
+        props.put("mail.smtp.connectiontimeout", "5000");
+        props.put("mail.smtp.timeout", "5000");
+        props.put("mail.smtp.writetimeout", "5000");
+
+        if (mailPort == 465) {
+            props.put("mail.smtp.ssl.enable", "true");
+            props.put("mail.smtp.socketFactory.port", "465");
+            props.put("mail.smtp.socketFactory.class", "javax.net.ssl.SSLSocketFactory");
+        }
+
+        this.dynamicSender = sender;
+        return dynamicSender;
+    }
+
     public void sendVerificationCode(String toEmail, String code) {
         if (!isConfigured()) {
-            log.warn("Email delivery requested for {} but SMTP provider is not configured.", maskEmail(toEmail));
+            log.warn("Email verification code requested for {} but SMTP provider is not configured.", maskEmail(toEmail));
             throw new EmailDeliveryException(
-                    "Email delivery provider is not configured (missing SPRING_MAIL_HOST). " +
+                    "Email delivery provider is unconfigured (missing SPRING_MAIL_HOST). " +
                     "Email verification is required for new public registrations in production. " +
                     "For competition review, please use the pre-verified demo accounts."
             );
@@ -64,7 +119,7 @@ public class EmailService {
                 If you did not create a VeriWeave account, please ignore this email.
                 """.formatted(code);
 
-        deliverSmtp(toEmail, subject, body);
+        deliver(toEmail, subject, body);
         log.info("Verification code successfully dispatched to {}", maskEmail(toEmail));
     }
 
@@ -72,9 +127,9 @@ public class EmailService {
         if (!isConfigured()) {
             log.warn("Password reset email requested for {} but SMTP provider is not configured.", maskEmail(toEmail));
             throw new EmailDeliveryException(
-                    "Email delivery provider is not configured (missing SPRING_MAIL_HOST). " +
+                    "Email delivery provider is unconfigured (missing SPRING_MAIL_HOST). " +
                     "Password recovery requires active SMTP credentials. " +
-                    "For competition review, use the known demo credentials (Secret123!)."
+                    "For competition review, use the configured demo accounts."
             );
         }
 
@@ -88,15 +143,18 @@ public class EmailService {
                 If you did not request a password reset, please secure your account immediately.
                 """.formatted(code);
 
-        deliverSmtp(toEmail, subject, body);
+        deliver(toEmail, subject, body);
         log.info("Password reset code successfully dispatched to {}", maskEmail(toEmail));
     }
 
-    public void sendWorkspaceInvitation(String toEmail, String workspaceName, String role, String inviteUrl) {
+    public EmailDeliveryResult sendWorkspaceInvitation(String toEmail, String workspaceName, String role, String inviteUrl) {
         if (!isConfigured()) {
             log.warn("Workspace invitation email requested for {} in workspace '{}' but SMTP is not configured.",
                     maskEmail(toEmail), workspaceName);
-            return;
+            return new EmailDeliveryResult(
+                    false,
+                    "SMTP provider is unconfigured (missing SPRING_MAIL_HOST). Invitation link generated and ready for direct sharing."
+            );
         }
 
         String subject = "You've been invited to join " + workspaceName + " on VeriWeave";
@@ -110,76 +168,38 @@ public class EmailService {
                 """.formatted(workspaceName, role, inviteUrl);
 
         try {
-            deliverSmtp(toEmail, subject, body);
+            deliver(toEmail, subject, body);
             log.info("Workspace invitation email dispatched to {}", maskEmail(toEmail));
+            return new EmailDeliveryResult(true, "Invitation email dispatched to " + toEmail);
         } catch (Exception ex) {
             log.error("Failed to deliver workspace invitation to {}: {}", maskEmail(toEmail), ex.getMessage());
+            return new EmailDeliveryResult(
+                    false,
+                    "SMTP delivery failed: " + ex.getMessage() + ". Invitation link generated and ready for direct sharing."
+            );
         }
     }
 
-    private void deliverSmtp(String toEmail, String subject, String bodyText) {
-        try (Socket socket = new Socket(mailHost, mailPort);
-             BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-             BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8))) {
+    private void deliver(String toEmail, String subject, String bodyText) {
+        JavaMailSender sender = getMailSender();
+        if (sender == null) {
+            throw new EmailDeliveryException("SMTP sender could not be initialized. Verify SPRING_MAIL_HOST and credentials.");
+        }
 
-            readResponse(reader); // 220 Greeting
+        try {
+            SimpleMailMessage msg = new SimpleMailMessage();
+            msg.setFrom(mailFrom);
+            msg.setTo(toEmail);
+            msg.setSubject(subject);
+            msg.setText(bodyText);
 
-            sendCmd(writer, "HELO " + mailHost);
-            readResponse(reader);
-
-            if (StringUtils.hasText(mailUsername) && StringUtils.hasText(mailPassword)) {
-                sendCmd(writer, "AUTH LOGIN");
-                readResponse(reader);
-
-                sendCmd(writer, Base64.getEncoder().encodeToString(mailUsername.getBytes(StandardCharsets.UTF_8)));
-                readResponse(reader);
-
-                sendCmd(writer, Base64.getEncoder().encodeToString(mailPassword.getBytes(StandardCharsets.UTF_8)));
-                readResponse(reader);
-            }
-
-            sendCmd(writer, "MAIL FROM:<" + mailFrom + ">");
-            readResponse(reader);
-
-            sendCmd(writer, "RCPT TO:<" + toEmail + ">");
-            readResponse(reader);
-
-            sendCmd(writer, "DATA");
-            readResponse(reader);
-
-            writer.write("From: " + mailFrom + "\r\n");
-            writer.write("To: " + toEmail + "\r\n");
-            writer.write("Subject: " + subject + "\r\n");
-            writer.write("Content-Type: text/plain; charset=UTF-8\r\n");
-            writer.write("\r\n");
-            writer.write(bodyText);
-            writer.write("\r\n.\r\n");
-            writer.flush();
-            readResponse(reader);
-
-            sendCmd(writer, "QUIT");
-        } catch (Exception ex) {
+            sender.send(msg);
+        } catch (MailException ex) {
             throw new EmailDeliveryException("SMTP transport failure to " + maskEmail(toEmail) + ": " + ex.getMessage(), ex);
         }
     }
 
-    private void sendCmd(BufferedWriter writer, String command) throws IOException {
-        writer.write(command + "\r\n");
-        writer.flush();
-    }
-
-    private String readResponse(BufferedReader reader) throws IOException {
-        String line = reader.readLine();
-        if (line == null) {
-            throw new IOException("Unexpected end of stream from SMTP server");
-        }
-        if (line.startsWith("4") || line.startsWith("5")) {
-            throw new IOException("SMTP Error: " + line);
-        }
-        return line;
-    }
-
-    private String maskEmail(String email) {
+    public String maskEmail(String email) {
         if (!StringUtils.hasText(email) || !email.contains("@")) {
             return "***";
         }

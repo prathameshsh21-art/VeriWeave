@@ -118,7 +118,7 @@ public class AuthController {
                 "providerStatus", configured ? "READY_FOR_PRODUCTION" : "NOT_READY_FOR_PRODUCTION",
                 "message", configured
                         ? "SMTP mail provider is active and ready for live verification codes."
-                        : "SMTP provider is unconfigured. For CodeTitan evaluation, use pre-seeded demo accounts (Secret123!)."
+                        : "SMTP provider is unconfigured. For evaluation, use pre-seeded demo accounts."
         )));
     }
 

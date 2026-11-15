@@ -32,6 +32,7 @@ const severityBadge = {
 };
 
 const statusBadge = {
+  DRAFT: 'bg-slate-100 text-slate-700 border-slate-300',
   PENDING_ANALYSIS: 'bg-slate-100 text-slate-700 border-slate-300',
   IN_REVIEW: 'bg-blue-100 text-blue-800 border-blue-300',
   CHANGES_REQUESTED: 'bg-amber-100 text-amber-800 border-amber-300',
@@ -835,83 +836,147 @@ export default function SubmissionsPage() {
                     </span>
                   </div>
 
-                  <form onSubmit={handleRecordDecision} className="space-y-4">
-                    {/* Decision Selector */}
-                    <div className="flex items-center space-x-3">
-                      {[
-                        { val: 'APPROVE', label: 'Approve Submission', color: 'emerald' },
-                        { val: 'REQUEST_CHANGES', label: 'Request Changes', color: 'amber' },
-                        { val: 'REJECT', label: 'Reject Submission', color: 'rose' }
-                      ].map((d) => (
-                        <button
-                          key={d.val}
-                          type="button"
-                          onClick={() => setReviewDecision(d.val)}
-                          className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${
-                            reviewDecision === d.val
-                              ? d.color === 'emerald'
-                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                                : d.color === 'amber'
-                                ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                                : 'bg-rose-600 text-white border-rose-600 shadow-xs'
-                              : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
-                          }`}
-                        >
-                          {d.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Mandatory Override Justification if Approving with Unresolved Critical Findings */}
-                    {reviewDecision === 'APPROVE' && hasUnresolvedCriticalFindings && (
-                      <div className="p-4 bg-rose-50 border border-rose-200 rounded-lg space-y-2">
-                        <div className="flex items-center space-x-2 text-rose-800 font-semibold text-xs">
-                          <AlertOctagon className="w-4 h-4 text-rose-600" />
-                          <span>MANDATORY OVERRIDE JUSTIFICATION REQUIRED</span>
-                        </div>
-                        <p className="text-xs text-rose-700">
-                          This submission has unresolved CRITICAL findings. To approve, you must record a formal, audited business justification.
+                  {subObj.status === 'DRAFT' ? (
+                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start space-x-3">
+                      <Clock className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-sm">Submission In Draft Status</p>
+                        <p className="mt-1 leading-relaxed text-amber-800">
+                          This submission is currently in DRAFT status. Automated compliance analysis must be run and verified before an independent review decision can be recorded.
                         </p>
+                      </div>
+                    </div>
+                  ) : subObj.status === 'APPROVED' ? (
+                    <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-start space-x-3">
+                      <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-sm">Submission Finalized & Approved</p>
+                        <p className="mt-1 leading-relaxed text-emerald-800">
+                          This submission has been formally APPROVED for brand and regulatory compliance. The current version is locked; no further review decisions can be submitted on this version.
+                        </p>
+                      </div>
+                    </div>
+                  ) : subObj.status === 'REJECTED' ? (
+                    <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 flex items-start space-x-3">
+                      <XCircle className="w-5 h-5 text-rose-600 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-sm">Submission Rejected</p>
+                        <p className="mt-1 leading-relaxed text-rose-800">
+                          This submission was REJECTED during compliance review. Awaiting a revised copy submission from the content creator.
+                        </p>
+                      </div>
+                    </div>
+                  ) : subObj.status === 'CHANGES_REQUESTED' ? (
+                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start space-x-3">
+                      <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-sm">Changes Requested</p>
+                        <p className="mt-1 leading-relaxed text-amber-800">
+                          Changes have been requested on this version. Awaiting a new revision from the content creator before further review.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <form onSubmit={handleRecordDecision} className="space-y-4">
+                      {/* Decision Selector */}
+                      <div className="flex items-center space-x-3">
+                        {[
+                          { val: 'APPROVE', label: 'Approve Submission', color: 'emerald' },
+                          { val: 'REQUEST_CHANGES', label: 'Request Changes', color: 'amber' },
+                          { val: 'REJECT', label: 'Reject Submission', color: 'rose' }
+                        ].map((d) => (
+                          <button
+                            key={d.val}
+                            type="button"
+                            onClick={() => setReviewDecision(d.val)}
+                            className={`px-4 py-2 rounded-lg text-sm font-semibold border transition-all ${
+                              reviewDecision === d.val
+                                ? d.color === 'emerald'
+                                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                                  : d.color === 'amber'
+                                  ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                                  : 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                                : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                            }`}
+                          >
+                            {d.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Mandatory Override Justification if Approving with Unresolved Critical Findings */}
+                      {reviewDecision === 'APPROVE' && hasUnresolvedCriticalFindings && (
+                        <div className="p-4 bg-rose-50 border border-rose-200 rounded-lg space-y-2">
+                          <div className="flex items-center space-x-2 text-rose-800 font-semibold text-xs">
+                            <AlertOctagon className="w-4 h-4 text-rose-600" />
+                            <span>MANDATORY OVERRIDE JUSTIFICATION REQUIRED</span>
+                          </div>
+                          <p className="text-xs text-rose-700">
+                            This submission has unresolved CRITICAL findings. To approve, you must record a formal, audited business justification.
+                          </p>
+                          <textarea
+                            required
+                            rows={2}
+                            placeholder="State legal / brand director justification for overriding critical compliance findings..."
+                            value={overrideReason}
+                            onChange={(e) => setOverrideReason(e.target.value)}
+                            className="w-full text-xs border border-rose-300 rounded p-2 focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                          />
+                        </div>
+                      )}
+
+                      {/* Review Comments */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                          Review Comments {(reviewDecision === 'REJECT' || reviewDecision === 'REQUEST_CHANGES') && <span className="text-rose-600">*</span>}
+                        </label>
                         <textarea
-                          required
                           rows={2}
-                          placeholder="State legal / brand director justification for overriding critical compliance findings..."
-                          value={overrideReason}
-                          onChange={(e) => setOverrideReason(e.target.value)}
-                          className="w-full text-xs border border-rose-300 rounded p-2 focus:ring-1 focus:ring-rose-500 focus:outline-none"
+                          required={reviewDecision === 'REJECT' || reviewDecision === 'REQUEST_CHANGES'}
+                          placeholder={reviewDecision === 'REQUEST_CHANGES' ? "Provide specific instructions for the creator to address before re-submitting..." : "Add compliance feedback or notes..."}
+                          value={reviewComments}
+                          onChange={(e) => setReviewComments(e.target.value)}
+                          className="w-full text-sm border border-slate-300 rounded-lg p-2.5 focus:ring-1 focus:ring-teal-500 focus:outline-none"
                         />
                       </div>
-                    )}
 
-                    {/* Review Comments */}
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                        Review Comments {(reviewDecision === 'REJECT' || reviewDecision === 'REQUEST_CHANGES') && <span className="text-rose-600">*</span>}
-                      </label>
-                      <textarea
-                        rows={2}
-                        required={reviewDecision === 'REJECT' || reviewDecision === 'REQUEST_CHANGES'}
-                        placeholder={reviewDecision === 'REQUEST_CHANGES' ? "Provide specific instructions for the creator to address before re-submitting..." : "Add compliance feedback or notes..."}
-                        value={reviewComments}
-                        onChange={(e) => setReviewComments(e.target.value)}
-                        className="w-full text-sm border border-slate-300 rounded-lg p-2.5 focus:ring-1 focus:ring-teal-500 focus:outline-none"
-                      />
-                    </div>
+                      <div className="flex items-center justify-between pt-1">
+                        <span className="text-xs text-slate-400">
+                          Recording as: <strong className="text-slate-600">{user?.fullName || user?.email}</strong>
+                        </span>
+                        <button
+                          type="submit"
+                          disabled={actionLoading}
+                          className="inline-flex items-center space-x-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors shadow-xs"
+                        >
+                          <UserCheck className="w-4 h-4" />
+                          <span>{actionLoading ? 'Recording...' : 'Commit Review Decision'}</span>
+                        </button>
+                      </div>
+                    </form>
+                  )}
 
-                    <div className="flex items-center justify-between pt-1">
-                      <span className="text-xs text-slate-400">
-                        Recording as: <strong className="text-slate-600">{user?.fullName || user?.email}</strong>
-                      </span>
-                      <button
-                        type="submit"
-                        disabled={actionLoading}
-                        className="inline-flex items-center space-x-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-colors shadow-xs"
-                      >
-                        <UserCheck className="w-4 h-4" />
-                        <span>{actionLoading ? 'Recording...' : 'Commit Review Decision'}</span>
-                      </button>
+                  {/* Previous decisions history for reviewers */}
+                  {submissionDecisions.length > 0 && (
+                    <div className="pt-2 border-t border-slate-100">
+                      <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-2">Previous Decisions:</span>
+                      <div className="space-y-2">
+                        {submissionDecisions.map((dec) => (
+                          <div key={dec.id} className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs flex items-center justify-between">
+                            <div>
+                              <span className="font-bold text-slate-800 font-mono">{dec.decision}</span>
+                              <span className="text-slate-500 ml-2">by {dec.reviewerName}</span>
+                              {dec.comment && <p className="text-slate-600 mt-1">"{dec.comment}"</p>}
+                              {dec.overrideReason && <p className="text-rose-600 mt-0.5 font-medium">Override: "{dec.overrideReason}"</p>}
+                            </div>
+                            <span className="text-[11px] text-slate-400 font-mono">
+                              {new Date(dec.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </form>
+                  )}
                 </div>
               )}
             </>

@@ -57,6 +57,11 @@ public class ReviewService {
         Submission submission = submissionRepository.findByIdAndWorkspaceId(submissionId, workspaceId)
                 .orElseThrow(() -> new AccessDeniedException("Submission not found in workspace"));
 
+        // 1. Creator Ownership Enforcement: Only the creator who owns the submission can respond
+        if (submission.getCreatedBy() == null || !submission.getCreatedBy().getId().equals(principal.getId())) {
+            throw new AccessDeniedException("Access denied: Only the creator who owns this submission can respond to its findings.");
+        }
+
         Finding finding = findingRepository.findById(findingId)
                 .orElseThrow(() -> new IllegalArgumentException("Finding not found: " + findingId));
 
@@ -64,10 +69,25 @@ public class ReviewService {
             throw new IllegalArgumentException("Finding does not belong to specified submission");
         }
 
-        // Creator reject requires a reason
+        // 2. Outdated version check: Findings must belong to the active/current content version
+        if (submission.getCurrentVersion() != null && !finding.getContentVersion().getId().equals(submission.getCurrentVersion().getId())) {
+            throw new IllegalStateException("Cannot respond to findings on an outdated version. Responses must apply to the active version.");
+        }
+
+        // 3. State integrity check: Cannot respond to findings on an already APPROVED submission
+        if (submission.getStatus() == SubmissionStatus.APPROVED) {
+            throw new IllegalStateException("Cannot respond to findings on an APPROVED submission.");
+        }
+
+        // 4. Action validation: Reject requires reason, Modify requires modifiedText
         if (request.getAction() == CreatorAction.REJECTED) {
             if (request.getReason() == null || request.getReason().trim().isBlank()) {
                 throw new IllegalArgumentException("A mandatory reason is required when rejecting a finding suggestion");
+            }
+        }
+        if (request.getAction() == CreatorAction.MODIFIED) {
+            if (request.getModifiedText() == null || request.getModifiedText().trim().isBlank()) {
+                throw new IllegalArgumentException("Modified text is required when choosing to modify a finding");
             }
         }
 
@@ -107,6 +127,33 @@ public class ReviewService {
         // 1. Separation of Duties Enforcement: Creator can NEVER approve own submission!
         if (submission.getCreatedBy().getId().equals(reviewer.getId())) {
             throw new AccessDeniedException("Separation of duties violation: A creator cannot approve their own submission.");
+        }
+
+        // 2. Prevent decisions on outdated / superseded content versions
+        ContentVersion currentVersion = submission.getCurrentVersion();
+        if (currentVersion != null && !currentVersion.getId().equals(contentVersionId)) {
+            throw new IllegalStateException(String.format(
+                    "Review decisions can only be recorded on the current active version (v%d). Version v%d is outdated/superseded.",
+                    currentVersion.getVersionNumber(), version.getVersionNumber()));
+        }
+
+        // 3. Prevent decisions on DRAFT submissions (must complete analysis first)
+        if (submission.getStatus() == SubmissionStatus.DRAFT) {
+            throw new IllegalStateException("Cannot record review decision: Submission is in DRAFT status and must complete analysis before review.");
+        }
+
+        // 4. Prevent repeated decisions after reaching terminal states
+        if (submission.getStatus() == SubmissionStatus.APPROVED) {
+            throw new IllegalStateException("Submission has already reached terminal APPROVED status. Subsequent review decisions are not permitted.");
+        }
+        if (submission.getStatus() == SubmissionStatus.REJECTED) {
+            throw new IllegalStateException("Submission has already reached terminal REJECTED status. A new revision must be submitted before review.");
+        }
+        if (submission.getStatus() == SubmissionStatus.CHANGES_REQUESTED) {
+            throw new IllegalStateException("Review decision has already been recorded (CHANGES_REQUESTED). A new revision must be submitted before review.");
+        }
+        if (reviewDecisionRepository.existsByContentVersionId(version.getId())) {
+            throw new IllegalStateException("A review decision has already been recorded for this version.");
         }
 
         // 2. Overriding Critical Findings requires an explicit recorded reason

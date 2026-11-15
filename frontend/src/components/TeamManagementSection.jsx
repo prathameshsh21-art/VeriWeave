@@ -110,6 +110,21 @@ export default function TeamManagementSection({ workspaceId, currentRole }) {
     }
   };
 
+  const handleResendInvite = async (invitationId) => {
+    try {
+      const res = await axiosClient.post(`/workspaces/${workspaceId}/invitations/${invitationId}/resend`);
+      const updated = res.data?.data;
+      if (updated?.emailDelivered) {
+        alert('Invitation email resent successfully to ' + updated.email);
+      } else {
+        alert('Invitation refreshed. Note: ' + (updated?.deliveryMessage || 'SMTP is unconfigured. Please copy and share the link directly.'));
+      }
+      loadData();
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to resend invitation.');
+    }
+  };
+
   const copyToClipboard = (token, text) => {
     const inviteUrl = `${window.location.origin}/invite/${token}`;
     navigator.clipboard.writeText(inviteUrl);
@@ -295,6 +310,14 @@ export default function TeamManagementSection({ workspaceId, currentRole }) {
                               )}
                             </button>
                             <button
+                              onClick={() => handleResendInvite(inv.id)}
+                              title="Resend invitation email"
+                              className="inline-flex items-center space-x-1 px-2 py-1 text-teal-700 hover:text-teal-800 hover:bg-teal-50 rounded border border-teal-200 transition-colors"
+                            >
+                              <Mail className="w-3 h-3" />
+                              <span className="text-[10px]">Resend</span>
+                            </button>
+                            <button
                               onClick={() => handleRevokeInvite(inv.id)}
                               title="Revoke invitation"
                               className="inline-flex items-center space-x-1 px-2 py-1 text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded border border-rose-200 transition-colors"
@@ -341,13 +364,26 @@ export default function TeamManagementSection({ workspaceId, currentRole }) {
 
               {generatedInvite ? (
                 <div className="space-y-4">
-                  <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2">
-                    <div className="flex items-center space-x-2 text-emerald-800 font-bold text-xs">
-                      <CheckCircle className="w-4 h-4 text-emerald-600" />
-                      <span>Invitation Successfully Generated!</span>
+                  <div className={`p-4 rounded-xl space-y-2 border ${generatedInvite.emailDelivered ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+                    <div className="flex items-center space-x-2 font-bold text-xs">
+                      {generatedInvite.emailDelivered ? (
+                        <>
+                          <CheckCircle className="w-4 h-4 text-emerald-600" />
+                          <span className="text-emerald-800">Invitation Email Dispatched!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Clock className="w-4 h-4 text-amber-600" />
+                          <span className="text-amber-800">Invitation Link Generated (Direct Share)</span>
+                        </>
+                      )}
                     </div>
-                    <p className="text-xs text-emerald-700">
-                      An invitation for <span className="font-semibold">{generatedInvite.email}</span> with role <span className="font-semibold">{generatedInvite.role}</span> has been created.
+                    <p className={`text-xs ${generatedInvite.emailDelivered ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      {generatedInvite.emailDelivered ? (
+                        <>An invitation email has been sent to <span className="font-semibold">{generatedInvite.email}</span> with assigned role <span className="font-semibold">{generatedInvite.role}</span>.</>
+                      ) : (
+                        <>{generatedInvite.deliveryMessage || 'SMTP is currently unconfigured. The invitation is active for 7 days.'} Please copy and share the link below directly with <span className="font-semibold">{generatedInvite.email}</span>.</>
+                      )}
                     </p>
                   </div>
 

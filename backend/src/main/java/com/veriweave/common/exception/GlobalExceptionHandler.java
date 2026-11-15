@@ -62,6 +62,12 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(ex.getMessage(), "BAD_REQUEST"));
     }
 
+    @ExceptionHandler(com.veriweave.common.email.EmailDeliveryException.class)
+    public ResponseEntity<ApiResponse<Void>> handleEmailDelivery(com.veriweave.common.email.EmailDeliveryException ex) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ApiResponse.error(ex.getMessage(), "EMAIL_DELIVERY_FAILED"));
+    }
+
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<ApiResponse<Void>> handleIllegalState(IllegalStateException ex) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)

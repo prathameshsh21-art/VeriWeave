@@ -15,7 +15,7 @@ function AppContent() {
   // Check if current route is an invitation link (/invite/:token)
   const pathname = window.location.pathname;
   if (pathname.startsWith('/invite/')) {
-    const token = pathname.replace('/invite/', '').split('/')[0];
+    const token = pathname.replace('/invite/', '').split('/')[0].split('?')[0];
     if (token) {
       return <AcceptInvitePage token={token} />;
     }

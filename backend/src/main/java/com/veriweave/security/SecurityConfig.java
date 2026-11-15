@@ -31,7 +31,7 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthFilter;
     private final CustomUserDetailsService userDetailsService;
 
-    @org.springframework.beans.factory.annotation.Value("${veriweave.cors.allowed-origins:http://localhost:5173,http://127.0.0.1:5173,https://veriweave-frontend.onrender.com}")
+    @org.springframework.beans.factory.annotation.Value("${veriweave.cors.allowed-origins:http://localhost:5173,http://127.0.0.1:5173,https://veriweave-frontend.onrender.com,https://veriweave.xyz,https://www.veriweave.xyz}")
     private List<String> allowedOrigins;
 
     @Bean

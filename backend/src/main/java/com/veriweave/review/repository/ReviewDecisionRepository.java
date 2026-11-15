@@ -17,4 +17,6 @@ public interface ReviewDecisionRepository extends JpaRepository<ReviewDecision, 
 
     @Query("SELECT rd FROM ReviewDecision rd LEFT JOIN FETCH rd.reviewer WHERE rd.contentVersion.id = :versionId ORDER BY rd.createdAt DESC")
     Optional<ReviewDecision> findFirstByContentVersionId(@Param("versionId") Long versionId);
+
+    boolean existsByContentVersionId(Long versionId);
 }

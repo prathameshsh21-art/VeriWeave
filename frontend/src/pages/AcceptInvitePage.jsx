@@ -24,7 +24,11 @@ export default function AcceptInvitePage({ token, onComplete }) {
           setError('Invitation not found or no longer active.');
         }
       } catch (err) {
-        setError(err.response?.data?.message || 'Invalid or expired invitation token.');
+        if (!err.response) {
+          setError('Unable to contact the VeriWeave server. Please verify your internet connection or check backend API status.');
+        } else {
+          setError(err.response?.data?.message || 'Invalid or expired invitation token.');
+        }
       } finally {
         setLoading(false);
       }
