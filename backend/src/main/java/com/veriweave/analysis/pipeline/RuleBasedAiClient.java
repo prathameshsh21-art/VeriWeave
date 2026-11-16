@@ -91,17 +91,52 @@ public class RuleBasedAiClient implements AiClient {
 
     private List<String> extractTriggerPhrases(String ruleText) {
         List<String> triggers = new ArrayList<>();
-        // Extract phrases in quotes e.g. "cheap", "clinically proven", etc.
-        Matcher quoteMatcher = Pattern.compile("[\"']([^\"']+)[\"']").matcher(ruleText);
-        while (quoteMatcher.find()) {
-            triggers.add(quoteMatcher.group(1));
+        if (ruleText == null || ruleText.isBlank()) {
+            return triggers;
         }
 
-        // Common guideline trigger patterns
+        // 1. First, search for explicit prohibition patterns (e.g., Never say '...', Do not use '...', Avoid '...')
+        // Captures either quoted phrases or plain words following prohibition markers
+        Pattern forbidPattern = Pattern.compile(
+                "(?:never\\s+say|do\\s+not\\s+use|prohibited|forbidden|avoid)\\s+(?:['\"]([^'\"]+)['\"]|([a-zA-Z0-9\\s]{3,30}?)(?=[.;,]|$|\\band\\b|\\bor\\b|\\ball\\b))",
+                Pattern.CASE_INSENSITIVE
+        );
+        Matcher forbidMatcher = forbidPattern.matcher(ruleText);
+        while (forbidMatcher.find()) {
+            String phrase = forbidMatcher.group(1);
+            if (phrase == null || phrase.isBlank()) {
+                phrase = forbidMatcher.group(2);
+            }
+            if (phrase != null && !phrase.isBlank()) {
+                triggers.add(phrase.trim());
+            }
+        }
+
+        // Also check if there is an "or 'instant detox'" chained prohibition following a prohibited clause
+        Pattern chainedOrPattern = Pattern.compile(
+                "(?:never\\s+say|do\\s+not\\s+use|prohibited|forbidden|avoid)\\s+['\"][^'\"]+['\"]\\s+(?:or|and)\\s+['\"]([^'\"]+)['\"]",
+                Pattern.CASE_INSENSITIVE
+        );
+        Matcher chainedMatcher = chainedOrPattern.matcher(ruleText);
+        while (chainedMatcher.find()) {
+            String phrase = chainedMatcher.group(1);
+            if (phrase != null && !phrase.isBlank() && !triggers.contains(phrase.trim())) {
+                triggers.add(phrase.trim());
+            }
+        }
+
+        // 2. If no explicit prohibition clauses were matched, fallback to quoted phrases
+        // BUT exclude quoted phrases that immediately follow positive recommendations (use, prefer, instead use, cite)
         if (triggers.isEmpty()) {
-            Matcher forbidMatcher = Pattern.compile("(?:never say|do not use|prohibited|forbidden|avoid)\\s+([a-zA-Z0-9\\s]{3,30})", Pattern.CASE_INSENSITIVE).matcher(ruleText);
-            if (forbidMatcher.find()) {
-                triggers.add(forbidMatcher.group(1).trim());
+            Matcher quoteMatcher = Pattern.compile("['\"]([^'\"]+)['\"]").matcher(ruleText);
+            while (quoteMatcher.find()) {
+                int matchStart = quoteMatcher.start();
+                String prefix = ruleText.substring(0, matchStart).trim().toLowerCase();
+                // Check if this quote is preceded by a positive recommendation keyword
+                if (prefix.matches(".*\\b(use|instead use|replace with|prefer|cite|recommend)\\b\\s*$")) {
+                    continue; // Skip approved alternative quotes
+                }
+                triggers.add(quoteMatcher.group(1));
             }
         }
 
@@ -124,15 +159,60 @@ public class RuleBasedAiClient implements AiClient {
     }
 
     private String generateSuggestedEdit(KnowledgeEntry entry, String passageQuote, String matchedText) {
+        String result = passageQuote;
         if (entry != null && entry.getText() != null) {
             String ruleText = entry.getText();
-            Matcher m = Pattern.compile("(?:use|instead use|replace with|prefer|say)\\s+[\"']([^\"']+)[\"']", Pattern.CASE_INSENSITIVE).matcher(ruleText);
+            List<String> prohibited = extractTriggerPhrases(ruleText);
+
+            String candidate = null;
+
+            // Pattern 1: Positive recommendation with quoted target
+            // e.g. "...; use 'accessible' or 'exceptional value'" or "... instead use '...'"
+            // Matches 'use', 'instead use', 'replace with', 'prefer', 'cite' when preceded by start, punctuation, or conjunction
+            Matcher m = Pattern.compile(
+                    "(?:^|[;.,]|\\band\\b)\\s*(?:instead\\s+use|replace\\s+with|prefer|use|must\\s+cite|cite)\\s+['\"]([^'\"]+)['\"]",
+                    Pattern.CASE_INSENSITIVE
+            ).matcher(ruleText);
             if (m.find()) {
-                String replacement = m.group(1).trim();
-                return passageQuote.replace(matchedText, replacement);
+                String found = m.group(1).trim();
+                boolean containsProhibited = prohibited.stream().anyMatch(p -> found.equalsIgnoreCase(p) || found.toLowerCase().contains(p.toLowerCase()));
+                if (!containsProhibited && !found.equalsIgnoreCase(matchedText)) {
+                    candidate = found;
+                }
+            }
+
+            // Pattern 2: Positive unquoted prescription
+            // e.g. "All wellness statements must cite sustained botanical balance."
+            if (candidate == null) {
+                Matcher mUnquoted = Pattern.compile(
+                        "(?:^|[;.,]|\\band\\b)\\s*(?:[a-zA-Z0-9\\s]{0,30}?\\b)?(?:must\\s+cite|cite|instead\\s+use|prefer|use)\\s+([a-zA-Z0-9\\s]{3,40}?)(?=[.;,]|$)",
+                        Pattern.CASE_INSENSITIVE
+                ).matcher(ruleText);
+                if (mUnquoted.find()) {
+                    String found = mUnquoted.group(1).trim().replaceAll("^['\"]+|['\"]+$", "");
+                    boolean containsProhibited = prohibited.stream().anyMatch(p -> found.equalsIgnoreCase(p) || found.toLowerCase().contains(p.toLowerCase()));
+                    if (!containsProhibited && !found.equalsIgnoreCase(matchedText) && !found.isBlank()) {
+                        candidate = found;
+                    }
+                }
+            }
+
+            if (candidate != null) {
+                // Replace the matched violation in the passage
+                result = result.replace(matchedText, candidate);
+
+                // Also clean up any other prohibited phrases from the same rule that happen to be in the passage snippet
+                for (String p : prohibited) {
+                    if (result.toLowerCase().contains(p.toLowerCase())) {
+                        result = Pattern.compile("\\b" + Pattern.quote(p) + "\\b", Pattern.CASE_INSENSITIVE)
+                                .matcher(result)
+                                .replaceAll(Matcher.quoteReplacement(candidate));
+                    }
+                }
+                return result;
             }
         }
         String code = entry != null && entry.getCode() != null ? entry.getCode() : "RULE";
-        return passageQuote.replace(matchedText, "[" + code + " approved alternative]");
+        return result.replace(matchedText, "[" + code + " approved alternative]");
     }
 }

@@ -389,12 +389,11 @@ export default function LoginPage() {
             </div>
           )}
 
-          {/* Proposal reference note */}
-          <div className="mt-6 pt-6 border-t border-slate-100">
-            <div className="text-xs text-slate-500 flex items-center space-x-2">
-              <CheckCircle2 className="w-4 h-4 text-teal-600 flex-shrink-0" />
-              <span>Stateless JWT session with server-enforced role permissions.</span>
-            </div>
+          {/* Demo account selector footer note */}
+          <div className="mt-6 pt-6 border-t border-slate-100 text-center">
+            <p className="text-xs text-slate-400">
+              Select any role above to pre-fill credentials for system evaluation.
+            </p>
           </div>
         </div>
       </div>

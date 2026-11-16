@@ -40,12 +40,22 @@ const statusBadge = {
   REJECTED: 'bg-rose-100 text-rose-800 border-rose-300',
 };
 
+const normalizeAction = (action) => {
+  if (!action) return null;
+  const upper = String(action).trim().toUpperCase();
+  if (upper === 'ACCEPTED' || upper === 'ACCEPT') return 'ACCEPT';
+  if (upper === 'MODIFIED' || upper === 'MODIFY') return 'MODIFY';
+  if (upper === 'REJECTED' || upper === 'REJECT') return 'REJECT';
+  return null;
+};
+
 export default function SubmissionsPage() {
   const { user, activeWorkspace } = useAuth();
   const [submissions, setSubmissions] = useState([]);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState(null);
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
@@ -63,7 +73,7 @@ export default function SubmissionsPage() {
   const [submissionVersions, setSubmissionVersions] = useState([]);
   const [submissionDecisions, setSubmissionDecisions] = useState([]);
 
-  // Finding response states: { [findingId]: { action: 'ACCEPT'|'MODIFY'|'REJECT', reason: '', proposedEdit: '' } }
+  // Finding response states: scoped by submissionId -> { [submissionId]: { [findingId]: { action, reason, proposedEdit } } }
   const [findingResponses, setFindingResponses] = useState({});
 
   // Review decision states
@@ -75,21 +85,36 @@ export default function SubmissionsPage() {
   const isReviewerOrAdmin = activeWorkspace?.role === 'REVIEWER' || activeWorkspace?.role === 'ADMIN';
 
   // Load submissions
-  const fetchSubmissions = async () => {
+  const fetchSubmissions = async (isManualRefresh = false) => {
     if (!workspaceId) return;
+    if (isManualRefresh && isRefreshing) return;
     try {
-      setLoading(true);
+      if (isManualRefresh) {
+        setIsRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+      setError(null);
       const res = await axiosClient.get(`/workspaces/${workspaceId}/submissions`);
       if (res.data?.success) {
-        setSubmissions(res.data.data || []);
-        if (res.data.data?.length > 0 && !selectedSubmissionId) {
-          setSelectedSubmissionId(res.data.data[0].id);
+        const freshList = res.data.data || [];
+        setSubmissions(freshList);
+        if (freshList.length > 0) {
+          setSelectedSubmissionId((prevId) => {
+            if (prevId && freshList.some((s) => s.id === prevId)) {
+              return prevId;
+            }
+            return freshList[0].id;
+          });
+        } else {
+          setSelectedSubmissionId(null);
         }
       }
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load submissions');
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -219,7 +244,14 @@ export default function SubmissionsPage() {
 
   // Submit creator response to a finding
   const handleFindingResponseSubmit = async (findingId) => {
-    const resp = findingResponses[findingId];
+    const existingResp = responses.find((r) => r.findingId === findingId);
+    const subResponses = findingResponses[selectedSubmissionId] || {};
+    const resp = subResponses[findingId] || {
+      action: normalizeAction(existingResp?.action),
+      reason: existingResp?.reason || '',
+      proposedEdit: existingResp?.modifiedText || existingResp?.proposedEdit || ''
+    };
+
     if (!resp || !resp.action) {
       setError('Please select an action: Accept, Modify, or Reject.');
       return;
@@ -289,7 +321,9 @@ export default function SubmissionsPage() {
   const hasUnresolvedCriticalFindings = findings.some(f => {
     if (f.severity !== 'CRITICAL') return false;
     const resp = responses.find(r => r.findingId === f.id);
-    return !resp || resp.action !== 'ACCEPT';
+    if (!resp) return true;
+    const normalized = normalizeAction(resp.action);
+    return normalized !== 'ACCEPT';
   });
 
   return (
@@ -345,8 +379,13 @@ export default function SubmissionsPage() {
             <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
               Submissions ({submissions.length})
             </h2>
-            <button onClick={fetchSubmissions} title="Refresh" className="text-slate-400 hover:text-slate-600">
-              <RefreshCw className="w-3.5 h-3.5" />
+            <button
+              onClick={() => fetchSubmissions(true)}
+              disabled={isRefreshing || loading}
+              title="Refresh Submissions"
+              className="text-slate-400 hover:text-slate-600 disabled:opacity-40 p-1 rounded hover:bg-slate-100 transition-colors"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-teal-600' : ''}`} />
             </button>
           </div>
 
@@ -510,10 +549,12 @@ export default function SubmissionsPage() {
                   ) : (
                     findings.map((finding) => {
                       const existingResp = responses.find((r) => r.findingId === finding.id);
-                      const currentFormState = findingResponses[finding.id] || {
-                        action: existingResp?.action || 'ACCEPT',
-                        reason: existingResp?.reason || '',
-                        proposedEdit: existingResp?.proposedEdit || ''
+                      const subResponses = findingResponses[selectedSubmissionId] || {};
+                      const findingDraft = subResponses[finding.id];
+                      const currentFormState = {
+                        action: findingDraft?.action !== undefined ? findingDraft.action : normalizeAction(existingResp?.action),
+                        reason: findingDraft?.reason !== undefined ? findingDraft.reason : (existingResp?.reason || ''),
+                        proposedEdit: findingDraft?.proposedEdit !== undefined ? findingDraft.proposedEdit : (existingResp?.modifiedText || existingResp?.proposedEdit || '')
                       };
 
                       return (
@@ -578,9 +619,9 @@ export default function SubmissionsPage() {
                               <span className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
                                 Creator Response
                               </span>
-                              {existingResp && (
+                              {existingResp && normalizeAction(existingResp.action) && (
                                 <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
-                                  Current: {existingResp.action}
+                                  Current: {normalizeAction(existingResp.action)}
                                 </span>
                               )}
                             </div>
@@ -592,7 +633,7 @@ export default function SubmissionsPage() {
                                   <>
                                     <div className="flex items-center justify-between">
                                       <span className="font-semibold text-slate-800">
-                                        Action Taken: <strong className="text-teal-800">{existingResp.action}</strong>
+                                        Action Taken: <strong className="text-teal-800">{normalizeAction(existingResp.action)}</strong>
                                       </span>
                                     </div>
                                     {existingResp.reason && (
@@ -623,7 +664,10 @@ export default function SubmissionsPage() {
                                       onClick={() =>
                                         setFindingResponses((prev) => ({
                                           ...prev,
-                                          [finding.id]: { ...currentFormState, action: act }
+                                          [selectedSubmissionId]: {
+                                            ...(prev[selectedSubmissionId] || {}),
+                                            [finding.id]: { ...currentFormState, action: act }
+                                          }
                                         }))
                                       }
                                       className={`px-3 py-1 rounded text-xs font-semibold border transition-all ${
@@ -655,7 +699,10 @@ export default function SubmissionsPage() {
                                       onChange={(e) =>
                                         setFindingResponses((prev) => ({
                                           ...prev,
-                                          [finding.id]: { ...currentFormState, reason: e.target.value }
+                                          [selectedSubmissionId]: {
+                                            ...(prev[selectedSubmissionId] || {}),
+                                            [finding.id]: { ...currentFormState, reason: e.target.value }
+                                          }
                                         }))
                                       }
                                       className="w-full text-xs border border-rose-300 rounded px-2.5 py-1.5 focus:ring-1 focus:ring-rose-500 focus:outline-none"
@@ -675,7 +722,10 @@ export default function SubmissionsPage() {
                                       onChange={(e) =>
                                         setFindingResponses((prev) => ({
                                           ...prev,
-                                          [finding.id]: { ...currentFormState, proposedEdit: e.target.value }
+                                          [selectedSubmissionId]: {
+                                            ...(prev[selectedSubmissionId] || {}),
+                                            [finding.id]: { ...currentFormState, proposedEdit: e.target.value }
+                                          }
                                         }))
                                       }
                                       className="w-full text-xs border border-slate-300 rounded px-2.5 py-1.5 focus:ring-1 focus:ring-teal-500 focus:outline-none"

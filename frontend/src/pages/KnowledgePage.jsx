@@ -70,26 +70,43 @@ export default function KnowledgePage() {
   const [newEntryRef, setNewEntryRef] = useState('');
   const [pdfFile, setPdfFile] = useState(null);
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
   const workspaceId = activeWorkspace?.id;
   const isAdmin = activeWorkspace?.role === 'ADMIN';
 
   // Load Sources
-  const fetchSources = async () => {
+  const fetchSources = async (isManualRefresh = false) => {
     if (!workspaceId) return;
+    if (isManualRefresh && isRefreshing) return;
     try {
-      setLoading(true);
+      if (isManualRefresh) {
+        setIsRefreshing(true);
+      } else {
+        setLoading(true);
+      }
       setError(null);
       const res = await axiosClient.get(`/workspaces/${workspaceId}/sources`);
       if (res.data?.success) {
-        setSources(res.data.data || []);
-        if (res.data.data?.length > 0 && !selectedSource) {
-          setSelectedSource(res.data.data[0]);
+        const freshSources = res.data.data || [];
+        setSources(freshSources);
+        if (freshSources.length > 0) {
+          // If already selected, preserve selection if still exists, otherwise choose first
+          setSelectedSource(prev => {
+            if (prev && freshSources.some(s => s.id === prev.id)) {
+              return freshSources.find(s => s.id === prev.id);
+            }
+            return freshSources[0];
+          });
+        } else {
+          setSelectedSource(null);
         }
       }
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load knowledge sources');
     } finally {
       setLoading(false);
+      setIsRefreshing(false);
     }
   };
 
@@ -357,8 +374,13 @@ export default function KnowledgePage() {
         <div className="lg:col-span-1 bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-3">
           <div className="flex items-center justify-between border-b border-slate-100 pb-2">
             <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Sources ({sources.length})</h2>
-            <button onClick={fetchSources} title="Refresh" className="text-slate-400 hover:text-slate-600">
-              <RefreshCw className="w-3.5 h-3.5" />
+            <button
+              onClick={() => fetchSources(true)}
+              disabled={isRefreshing || loading}
+              title="Refresh Sources"
+              className="text-slate-400 hover:text-slate-600 disabled:opacity-40 p-1 rounded hover:bg-slate-100 transition-colors"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-teal-600' : ''}`} />
             </button>
           </div>
 
